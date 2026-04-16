@@ -112,7 +112,7 @@ def verify_step_up(
     target_resource_id: str,
     operator_id: Optional[str] = None,
     challenge: Optional[str] = None,
-    assertion_payload: Optional[dict[str, Any]] = None
+    assertion_payload: Optional[StepUpAssertion] = None
 ) -> bool:
     """
     Helper to verify step-up if provided.
@@ -120,7 +120,13 @@ def verify_step_up(
     """
     if not challenge or not assertion_payload or not operator_id:
         return False
-    return verifier.verify_assertion(challenge, assertion_payload, action, target_resource_id, operator_id)
+    return verifier.verify_assertion(
+        challenge=challenge,
+        assertion_payload=assertion_payload.model_dump(),
+        action=action,
+        resource_id=target_resource_id,
+        operator_id=operator_id
+    )
 
 
 @app.get('/admin/audit/verify', response_model=AuditVerificationResult)
@@ -173,7 +179,7 @@ def api_release_legal_hold(
     hold_id: str, 
     operator_id: Optional[str] = None, 
     challenge: Optional[str] = None, 
-    assertion_payload: Optional[dict[str, Any]] = None
+    assertion_payload: Optional[StepUpAssertion] = None
 ) -> LegalHoldOut:
     is_verified = verify_step_up("release_legal_hold", hold_id, operator_id, challenge, assertion_payload)
     return LegalHoldOut(**release_legal_hold(hold_id, step_up_verified=is_verified))
@@ -194,7 +200,7 @@ def api_execute_deletion_request(
     request_id: str,
     operator_id: Optional[str] = None, 
     challenge: Optional[str] = None, 
-    assertion_payload: Optional[dict[str, Any]] = None
+    assertion_payload: Optional[StepUpAssertion] = None
 ) -> DeletionRequestOut:
     is_verified = verify_step_up("execute", request_id, operator_id, challenge, assertion_payload)
     return DeletionRequestOut(**execute_deletion_request(request_id, step_up_verified=is_verified))
@@ -205,12 +211,24 @@ def api_get_evidence(request_id: str) -> EvidenceOut:
     return EvidenceOut(**get_evidence(request_id))
 
 @app.post('/deletion-requests/{request_id}/cancel', response_model=DeletionRequestOut)
-def api_cancel_deletion_request(request_id: str) -> DeletionRequestOut:
-    return DeletionRequestOut(**cancel_deletion_request(request_id))
+def api_cancel_deletion_request(
+    request_id: str,
+    operator_id: Optional[str] = None, 
+    challenge: Optional[str] = None, 
+    assertion_payload: Optional[StepUpAssertion] = None
+) -> DeletionRequestOut:
+    is_verified = verify_step_up("cancel", request_id, operator_id, challenge, assertion_payload)
+    return DeletionRequestOut(**cancel_deletion_request(request_id, step_up_verified=is_verified))
 
 @app.post('/deletion-requests/{request_id}/finalize', response_model=DeletionRequestOut)
-def api_finalize_deletion_request(request_id: str) -> DeletionRequestOut:
-    return DeletionRequestOut(**finalize_deletion_request(request_id))
+def api_finalize_deletion_request(
+    request_id: str,
+    operator_id: Optional[str] = None, 
+    challenge: Optional[str] = None, 
+    assertion_payload: Optional[StepUpAssertion] = None
+) -> DeletionRequestOut:
+    is_verified = verify_step_up("finalize", request_id, operator_id, challenge, assertion_payload)
+    return DeletionRequestOut(**finalize_deletion_request(request_id, step_up_verified=is_verified))
 
 @app.get('/audit-events')
 def api_list_audit_events(entity_type: Optional[str] = None, entity_id: Optional[str] = None):

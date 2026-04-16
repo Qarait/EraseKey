@@ -790,14 +790,15 @@ def get_evidence(request_id: str) -> dict[str, Any]:
                 detail='Deletion request has no evidence yet. Execute it first.',
             )
             
+        data = _row_to_dict(row) or {}
         return {
-            'request_id': row['id'],
-            'status': row['status'],
-            'evidence': json.loads(row['evidence_json']),
-            'audit_event_id': row['audit_id'],
-            'event_hash': row['event_hash'],
-            'prev_hash': row['prev_hash'],
-            'chain_version': row.get('chain_version', 1)
+            'request_id': data['id'],
+            'status': data['status'],
+            'evidence': json.loads(data['evidence_json']),
+            'audit_event_id': data['audit_id'],
+            'event_hash': data['event_hash'],
+            'prev_hash': data['prev_hash'],
+            'chain_version': data.get('chain_version', 1)
         }
 
 
