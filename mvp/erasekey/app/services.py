@@ -21,7 +21,13 @@ from .schemas import (
     RequestStatus,
     EraseStatus,
 )
-from .utils import canonical_json, new_id, sha256_hex, utc_now
+from .utils import (
+    canonical_json,
+    new_id,
+    sha256_hex,
+    utc_now,
+    utc_now_dt,
+)
 
 
 def _row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -514,7 +520,7 @@ def execute_deletion_request(request_id: str) -> dict[str, Any]:
             (request_item['tenant_id'], request_item['dataset_id'], request_item['subject_id']),
         ).fetchall()
 
-        pending_until_obj = datetime.now(timezone.utc) + timedelta(days=window)
+        pending_until_obj = utc_now_dt() + timedelta(days=window)
         pending_until_str = pending_until_obj.isoformat()
         
         affected_keys = []

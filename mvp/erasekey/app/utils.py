@@ -7,8 +7,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 
+def utc_now_dt() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return utc_now_dt().isoformat()
 
 
 def new_id(prefix: str) -> str:

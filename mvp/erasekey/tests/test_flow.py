@@ -201,10 +201,10 @@ class EraseKeyFlowTests(unittest.TestCase):
         self.assertEqual(data['deletion_window_days'], 7)
         self.assertTrue(data['auto_finalization_enabled'])
 
-    @mock.patch('app.services.utc_now')
-    def test_automatic_finalization_worker(self, mock_now) -> None:
+    @mock.patch('app.utils.utc_now_dt')
+    def test_automatic_finalization_worker(self, mock_now_dt) -> None:
         # 1. Setup: Start at T=0
-        mock_now.return_value = "2026-04-15T00:00:00Z"
+        mock_now_dt.return_value = datetime(2026, 4, 15, tzinfo=timezone.utc)
         
         tenant = self.client.post('/tenants', json={'name': 'WorkerTest'}).json()
         dataset = self.client.post('/datasets', json={'tenant_id': tenant['id'], 'name': 'ds'}).json()
@@ -222,13 +222,13 @@ class EraseKeyFlowTests(unittest.TestCase):
         self.client.post(f"/deletion-requests/{del_req['id']}/execute")
         
         # 3. Run worker at T+1 day: Should do nothing
-        mock_now.return_value = "2026-04-16T00:00:00Z"
+        mock_now_dt.return_value = datetime(2026, 4, 16, tzinfo=timezone.utc)
         from app.services import finalize_due_deletions
         finalized = finalize_due_deletions()
         self.assertEqual(len(finalized), 0)
         
         # 4. Run worker at T+8 days: Should finalize
-        mock_now.return_value = "2026-04-23T00:00:00Z"
+        mock_now_dt.return_value = datetime(2026, 4, 23, tzinfo=timezone.utc)
         finalized = finalize_due_deletions()
         self.assertEqual(len(finalized), 1)
         self.assertEqual(finalized[0], del_req['id'])
@@ -237,9 +237,9 @@ class EraseKeyFlowTests(unittest.TestCase):
         erased = self.client.get(f"/records/{record['id']}")
         self.assertEqual(erased.json()['erase_status'], 'cryptographically_erased')
 
-    @mock.patch('app.services.utc_now')
-    def test_worker_respects_new_legal_hold(self, mock_now) -> None:
-        mock_now.return_value = "2026-04-15T00:00:00Z"
+    @mock.patch('app.utils.utc_now_dt')
+    def test_worker_respects_new_legal_hold(self, mock_now_dt) -> None:
+        mock_now_dt.return_value = datetime(2026, 4, 15, tzinfo=timezone.utc)
         tenant = self.client.post('/tenants', json={'name': 'HoldTest'}).json()
         dataset = self.client.post('/datasets', json={'tenant_id': tenant['id'], 'name': 'ds'}).json()
         
@@ -251,7 +251,7 @@ class EraseKeyFlowTests(unittest.TestCase):
         self.client.post(f"/deletion-requests/{del_req['id']}/execute")
         
         # Time passes...
-        mock_now.return_value = "2026-04-25T00:00:00Z"
+        mock_now_dt.return_value = datetime(2026, 4, 25, tzinfo=timezone.utc)
         
         # BUT: A legal hold is added at the last minute
         self.client.post(
