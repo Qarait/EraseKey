@@ -709,3 +709,44 @@ def list_audit_events(entity_type: str | None = None, entity_id: str | None = No
             item['payload_json'] = json.loads(item['payload_json'])
             results.append(item)
         return results
+
+
+def finalize_due_deletions() -> list[str]:
+    """
+    Finds and finalizes all 'scheduled' deletion requests that have passed their waiting period.
+    Returns a list of request IDs that were successfully finalized.
+    """
+    due_request_ids = []
+    with get_conn() as conn:
+        now = utc_now()
+        # Join deletion_requests with subject_keys to find requests where keys are ready for destruction
+        rows = conn.execute(
+            """
+            SELECT DISTINCT dr.id
+            FROM deletion_requests dr
+            JOIN subject_keys sk ON dr.tenant_id = sk.tenant_id
+               AND dr.dataset_id = sk.dataset_id
+               AND dr.subject_id = sk.subject_id
+            WHERE dr.status = 'scheduled'
+              AND sk.key_state = 'pending_erasure'
+              AND sk.pending_deletion_until <= ?
+            """,
+            (now,),
+        ).fetchall()
+        due_request_ids = [row['id'] for row in rows]
+
+    finalized_ids = []
+    for request_id in due_request_ids:
+        try:
+            # Re-use manual finalization path to ensure legal holds are checked
+            # and audit events are properly recorded.
+            finalize_deletion_request(request_id)
+            finalized_ids.append(request_id)
+        except HTTPException as exc:
+            # This is expected if a legal hold was added in the interim
+            # or if another process finalized it first.
+            print(f"INFO: Automatic finalization skipped for {request_id}: {exc.detail}")
+        except Exception as exc:
+            print(f"ERROR: Failed to finalize {request_id} automatically: {exc}")
+
+    return finalized_ids

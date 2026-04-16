@@ -123,3 +123,10 @@ class EvidenceOut(BaseModel):
 class HealthOut(BaseModel):
     status: str
     app: str
+
+
+class ProviderStatusOut(BaseModel):
+    kms_mode: str
+    kms_key_id: Optional[str]
+    deletion_window_days: int
+    auto_finalization_enabled: bool

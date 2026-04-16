@@ -19,6 +19,7 @@ from .schemas import (
     RecordOut,
     TenantCreate,
     TenantOut,
+    ProviderStatusOut,
 )
 from .services import (
     create_dataset,
@@ -36,6 +37,7 @@ from .services import (
     release_legal_hold,
     cancel_deletion_request,
     finalize_deletion_request,
+    finalize_due_deletions,
 )
 
 app = FastAPI(
@@ -56,6 +58,20 @@ def startup() -> None:
 @app.get('/healthz', response_model=HealthOut)
 def healthz() -> HealthOut:
     return HealthOut(status='ok', app=settings.app_name)
+
+
+@app.get('/admin/provider-status', response_model=ProviderStatusOut)
+def api_provider_status() -> ProviderStatusOut:
+    raw_key_id = settings.aws_kms_key_id or "none"
+    # Redact key ID: show suffix only (last 4 chars)
+    redacted_id = f"...{raw_key_id[-4:]}" if len(raw_key_id) > 4 else raw_key_id
+    
+    return ProviderStatusOut(
+        kms_mode=settings.kms_mode,
+        kms_key_id=redacted_id,
+        deletion_window_days=settings.deletion_window_days,
+        auto_finalization_enabled=True  # Logic implemented in services.py and worker.py
+    )
 
 
 @app.post('/tenants', response_model=TenantOut, status_code=201)

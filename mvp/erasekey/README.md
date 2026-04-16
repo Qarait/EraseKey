@@ -2,137 +2,80 @@
 
 EraseKey is a Deletion Assurance MVP inspired by the cryptographic-erasure thesis in Article 3.
 
-Instead of pretending every copy of user data can be physically deleted immediately, this service encrypts subject-scoped records with envelope encryption and then makes them unreadable by destroying the wrapped subject keys. The ciphertext can remain in place, which mirrors the reality of backups and cold storage.
+Instead of pretending every copy of user data can be physically deleted immediately, this service encrypts subject-scoped records with envelope encryption and then makes them unreadable by destroying the wrapped subject keys. The ciphertext remains in place (mirroring backups/cold storage), but is rendered cryptographically unrecoverable.
 
-## What this MVP does
+## Core Features
 
-- Creates tenants and datasets
-- Encrypts records under subject-scoped data keys
-- Reuses active subject keys for new records until deletion
-- Supports legal holds that block erasure
-- Executes cryptographic erasure by destroying wrapped subject keys
-- Produces deletion evidence and an audit trail
-- Returns `cryptographically_erased` for records whose keys were destroyed
+- **Multi-Tenant & Dataset Scoped**: Organize keys and records by tenant and dataset.
+- **Subject-Scoped Keys**: Automatically manages cryptographic keys on a per-subject basis (e.g., per user).
+- **AWS KMS Integration**: Support for real AWS KMS as the Root Key Provider.
+- **Deletion Lifecycle**:
+    - **Pending**: Request created but not yet executed.
+    - **Scheduled**: Request executed; keys are in a "Pending Erasure" state for a mandatory waiting period. Access is blocked.
+    - **Finalized**: Wrapped keys are destroyed; erasure is complete.
+- **Legal Holds**: Holds block both the transition to "Scheduled" and the final "Finalized" step.
+- **Audit Trail**: Every action (ingestion, hold, schedule, destroy) produces a signed-hash audit event.
 
-## What this MVP does not do yet
+## Tech Stack
 
-- Real AWS KMS integration
-- Key deletion waiting periods and cancellation windows
-- Data lineage discovery across warehouses, queues, and feature stores
-- Restore-safe re-deletion after snapshot recovery
-- Policy-driven retention across multiple cloud accounts
-- Search tokenization for encrypted fields
-- Production auth, RBAC, rate limiting, or SIEM integration
+- **FastAPI**: Core API framework.
+- **SQLite**: Local metadata and key-state store.
+- **AES-256-GCM**: Envelope encryption via `cryptography`.
+- **boto3**: AWS KMS integration.
 
-## Tech stack
-
-- FastAPI
-- SQLite for the MVP metadata store
-- AES-256-GCM envelope encryption via `cryptography`
-
-## Run locally
-
-```bash
-cd erasekey
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload
-```
-
-Open the API docs at `http://127.0.0.1:8000/docs`.
-
-## Demo flow
-
-1. Create a tenant.
-2. Create a dataset.
-3. Ingest one or more records for the same subject.
-4. Read the record back and confirm it is decryptable.
-5. Create and execute a deletion request.
-6. Read the same record again and confirm `erase_status=cryptographically_erased`.
-7. Fetch deletion evidence.
-
-## Sample curl commands
-
-Create a tenant:
-
-```bash
-curl -s -X POST http://127.0.0.1:8000/tenants \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"Acme Health"}'
-```
-
-Create a dataset:
-
-```bash
-curl -s -X POST http://127.0.0.1:8000/datasets \
-  -H 'Content-Type: application/json' \
-  -d '{"tenant_id":"tenant_xxx","name":"support_tickets","description":"Customer support transcripts"}'
-```
-
-Ingest a record:
-
-```bash
-curl -s -X POST http://127.0.0.1:8000/records \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "tenant_id":"tenant_xxx",
-    "dataset_id":"dataset_xxx",
-    "subject_id":"user_123",
-    "record_type":"ticket",
-    "payload":{"email":"user@example.com","message":"Please delete my account."}
-  }'
-```
-
-Create a deletion request:
-
-```bash
-curl -s -X POST http://127.0.0.1:8000/deletion-requests \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "tenant_id":"tenant_xxx",
-    "dataset_id":"dataset_xxx",
-    "subject_id":"user_123",
-    "requested_by":"privacy-team",
-    "reason":"GDPR erasure request"
-  }'
-```
-
-Execute the deletion request:
-
-```bash
-curl -s -X POST http://127.0.0.1:8000/deletion-requests/delreq_xxx/execute
-```
-
-Fetch evidence:
-
-```bash
-curl -s http://127.0.0.1:8000/deletion-requests/delreq_xxx/evidence
-```
-
-## Repository layout
+## Repository Layout
 
 ```text
 app/
-  config.py
-  crypto.py
-  db.py
-  main.py
-  schemas.py
-  services.py
-docs/
-  antigravity-playbook.md
-  architecture.md
-  product-brief.md
+  config.py         # Environment-driven configuration
+  crypto.py         # AES-256-GCM logic
+  db.py             # SQLite schema and connections
+  key_providers.py  # Mock/AWS Root Key Providers
+  main.py           # API routes and entry point
+  schemas.py        # Pydantic models
+  services.py       # Core business logic
+  utils.py          # ID generation and hashing
+scripts/
+  aws_smoke_test.py # Verification for AWS KMS connectivity
+  finalize_worker.py # Background worker for due deletions
 tests/
-  test_flow.py
+  test_flow.py      # E2E lifecycle and safety tests
 ```
 
-## Next production steps
+## Running Locally
 
-- Swap the demo root key provider for AWS KMS or Vault
-- Split metadata, key orchestration, and evidence services
-- Add auth and per-tenant access control
-- Add object-storage connectors and warehouse tombstoning
-- Build restore detection and re-delete automation
-- Add signed evidence exports and policy packs
+1. Install dependencies:
+   ```bash
+   cd mvp/erasekey
+   python -m venv .venv
+   source .venv/bin/activate  # or .venv\Scripts\activate on Windows
+   pip install -r requirements.txt
+   ```
+
+2. Run the server:
+   ```bash
+   uvicorn app.main:app --reload
+   ```
+
+3. Open the API docs at `http://127.0.0.1:8000/docs`.
+
+## Production Configuration
+
+EraseKey behavior is controlled by environment variables:
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `ERASEKEY_KMS_MODE` | `mock` | `mock` for local development, `aws` for production. |
+| `ERASEKEY_AWS_KMS_KEY_ID` | None | The ARN or ID of the CMK in AWS KMS. |
+| `ERASEKEY_DELETION_WINDOW_DAYS` | `7` | Mandatory waiting period before keys can be destroyed. |
+
+## Deletion Semantics
+
+1. **`POST /deletion-requests/{id}/execute`**:
+   Moves a request from `pending` to `scheduled`. Associated subject keys enter `pending_erasure` state. Data becomes unreadable via the API.
+2. **`POST /deletion-requests/{id}/cancel`**:
+   Reverts a `scheduled` request to `canceled`. Keys return to `active` state and data is readable again. Only possible before finalization.
+3. **`POST /deletion-requests/{id}/finalize`**:
+   Destroys the wrapped subject keys. This is irreversible.
+4. **Automatic Finalization**:
+   Run `python scripts/finalize_worker.py` to automatically finalize all requests whose waiting period has expired.

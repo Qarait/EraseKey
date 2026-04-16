@@ -1,0 +1,45 @@
+name: EraseKey CI
+
+on:
+  push:
+    paths:
+      - 'mvp/erasekey/**'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    paths:
+      - 'mvp/erasekey/**'
+      - '.github/workflows/ci.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    defaults:
+      run:
+        working-directory: mvp/erasekey
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Tests
+        id: run_tests
+        run: |
+          python -m unittest discover -v tests > test_output.log 2>&1
+          cat test_output.log
+
+      - name: Upload Test Log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unittest-log
+          path: mvp/erasekey/test_output.log
