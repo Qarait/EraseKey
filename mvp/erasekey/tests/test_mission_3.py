@@ -36,7 +36,6 @@ def test_step_up_replay_prevention():
     }
     
     from app.main import verify_step_up
-    # verify_step_up now always validates the envelope
     assert verify_step_up("execute", "test-1", auth_envelope) is True
     
     # 3. Replayed assertion should fail because challenge is consumed
@@ -94,7 +93,6 @@ def test_malformed_auth_envelope():
 def test_missing_auth_body_results_in_deny():
     # For destructive actions, missing body results in step_up_verified=False -> 403
     resp = client.post("/deletion-requests/any/execute")
-    # Note: If Body(None), FastAPI allows NO body. then verify_step_up returns False.
     assert resp.status_code == 403
     assert "STEP_UP_REQUIRED" in resp.json()["detail"]
 

@@ -76,6 +76,32 @@ def _audit(conn: sqlite3.Connection, entity_type: str, entity_id: str, action: s
     return event_hash
 
 
+def _handle_policy_deny(conn: sqlite3.Connection, entity_id: str, decision: PolicyResponse, entity_type: str):
+    """
+    Centralized policy denial handler.
+    Ensures that for deletion requests, legal holds are persisted as 'blocked' status
+    before raising the final 403.
+    """
+    blocked_reason = f"Policy Denied: {decision.reason_code}"
+    
+    if decision.reason_code == "ACTIVE_LEGAL_HOLD" and entity_type == "deletion_request":
+        conn.execute(
+            'UPDATE deletion_requests SET status = ?, blocked_reason = ? WHERE id = ?',
+            (RequestStatus.blocked.value, blocked_reason, entity_id),
+        )
+        _audit(conn, 'deletion_request', entity_id, 'deletion_request.blocked', {
+            'reason_code': decision.reason_code,
+            'blocked_reason': blocked_reason
+        })
+        # Crucial: commit the state transition before raising exception
+        conn.commit()
+    
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=blocked_reason
+    )
+
+
 def _fetch_tenant(conn: sqlite3.Connection, tenant_id: str) -> dict[str, Any]:
     row = conn.execute('SELECT * FROM tenants WHERE id = ?', (tenant_id,)).fetchone()
     if row is None:
@@ -236,10 +262,7 @@ def release_legal_hold(hold_id: str, step_up_verified: bool = False) -> dict[str
         )
         decision = engine.evaluate(context)
         if decision.decision == PolicyDecision.DENY:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Policy Denied: {decision.reason_code}"
-            )
+            _handle_policy_deny(conn, hold_id, decision, "legal_hold")
 
         released_at = utils.utc_now()
         conn.execute(
@@ -547,22 +570,7 @@ def execute_deletion_request(request_id: str, step_up_verified: bool = False) ->
         decision = engine.evaluate(context)
         
         if decision.decision == PolicyDecision.DENY:
-            blocked_reason = f"Policy Denied: {decision.reason_code}"
-            
-            # If denied due to holds, we mark as blocked. Otherwise we might just raise exception.
-            if decision.reason_code == "ACTIVE_LEGAL_HOLD":
-                conn.execute(
-                    'UPDATE deletion_requests SET status = ?, blocked_reason = ? WHERE id = ?',
-                    (RequestStatus.blocked.value, blocked_reason, request_id),
-                )
-                request_item['status'] = RequestStatus.blocked.value
-                request_item['blocked_reason'] = blocked_reason
-                return request_item
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=blocked_reason
-                )
+            _handle_policy_deny(conn, request_id, decision, "deletion_request")
 
         window = settings.deletion_window_days
         now = utils.utc_now()
@@ -718,10 +726,7 @@ def finalize_deletion_request(request_id: str, step_up_verified: bool = False) -
         )
         decision = engine.evaluate(context)
         if decision.decision == PolicyDecision.DENY:
-             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Policy Denied: {decision.reason_code}"
-            )
+            _handle_policy_deny(conn, request_id, decision, "deletion_request")
 
         return _finalize_deletion_internal(conn, request_item, utils.utc_now())
 
@@ -745,10 +750,7 @@ def cancel_deletion_request(request_id: str, step_up_verified: bool = False) -> 
         )
         decision = engine.evaluate(context)
         if decision.decision == PolicyDecision.DENY:
-             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Policy Denied: {decision.reason_code}"
-            )
+            _handle_policy_deny(conn, request_id, decision, "deletion_request")
 
         now = utils.utc_now()
         
