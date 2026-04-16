@@ -110,28 +110,32 @@ def api_generate_challenge(action: str, target_resource_id: str, operator_id: st
 def verify_step_up(
     action: str,
     target_resource_id: str,
-    operator_id: Optional[str] = None,
-    challenge: Optional[str] = None,
-    assertion_payload: Optional[Union[StepUpAssertion, dict[str, Any]]] = None
+    auth: Optional[Union[StepUpAssertion, dict[str, Any]]] = None
 ) -> bool:
     """
-    Helper to verify step-up if provided.
-    In a real app, this would be a FastAPI Dependency extracting from headers.
+    Helper to verify step-up envelope against verifier.
+    Enforces strict Pydantic validation even for dictionary inputs.
     """
-    if not challenge or not assertion_payload or not operator_id:
+    if not auth:
         return False
     
-    if hasattr(assertion_payload, "model_dump"):
-        p_dict = assertion_payload.model_dump()
-    else:
-        p_dict = assertion_payload
+    # Enforce strict boundary validation
+    try:
+        if isinstance(auth, dict):
+            validated_auth = StepUpAssertion.model_validate(auth)
+        else:
+            validated_auth = auth
+    except Exception:
+        # Validation failure results in denied auth
+        return False
 
+    # Pass the nested assertion payload to the verifier
     return verifier.verify_assertion(
-        challenge=challenge,
-        assertion_payload=p_dict,
+        challenge=validated_auth.challenge,
+        assertion_payload=validated_auth.assertion_payload.model_dump(),
         action=action,
         resource_id=target_resource_id,
-        operator_id=operator_id
+        operator_id=validated_auth.operator_id
     )
 
 
@@ -183,11 +187,9 @@ def api_create_legal_hold(payload: LegalHoldCreate) -> LegalHoldOut:
 @app.post('/legal-holds/{hold_id}/release', response_model=LegalHoldOut)
 def api_release_legal_hold(
     hold_id: str, 
-    operator_id: Optional[str] = None, 
-    challenge: Optional[str] = None, 
-    assertion_payload: Optional[StepUpAssertion] = Body(None)
+    auth: Optional[StepUpAssertion] = Body(None)
 ) -> LegalHoldOut:
-    is_verified = verify_step_up("release_legal_hold", hold_id, operator_id, challenge, assertion_payload)
+    is_verified = verify_step_up("release_legal_hold", hold_id, auth)
     return LegalHoldOut(**release_legal_hold(hold_id, step_up_verified=is_verified))
 
 
@@ -204,11 +206,9 @@ def api_get_deletion_request(request_id: str) -> DeletionRequestOut:
 @app.post('/deletion-requests/{request_id}/execute', response_model=DeletionRequestOut)
 def api_execute_deletion_request(
     request_id: str,
-    operator_id: Optional[str] = None, 
-    challenge: Optional[str] = None, 
-    assertion_payload: Optional[StepUpAssertion] = Body(None)
+    auth: Optional[StepUpAssertion] = Body(None)
 ) -> DeletionRequestOut:
-    is_verified = verify_step_up("execute", request_id, operator_id, challenge, assertion_payload)
+    is_verified = verify_step_up("execute", request_id, auth)
     return DeletionRequestOut(**execute_deletion_request(request_id, step_up_verified=is_verified))
 
 
@@ -219,21 +219,17 @@ def api_get_evidence(request_id: str) -> EvidenceOut:
 @app.post('/deletion-requests/{request_id}/cancel', response_model=DeletionRequestOut)
 def api_cancel_deletion_request(
     request_id: str,
-    operator_id: Optional[str] = None, 
-    challenge: Optional[str] = None, 
-    assertion_payload: Optional[StepUpAssertion] = Body(None)
+    auth: Optional[StepUpAssertion] = Body(None)
 ) -> DeletionRequestOut:
-    is_verified = verify_step_up("cancel", request_id, operator_id, challenge, assertion_payload)
+    is_verified = verify_step_up("cancel", request_id, auth)
     return DeletionRequestOut(**cancel_deletion_request(request_id, step_up_verified=is_verified))
 
 @app.post('/deletion-requests/{request_id}/finalize', response_model=DeletionRequestOut)
 def api_finalize_deletion_request(
     request_id: str,
-    operator_id: Optional[str] = None, 
-    challenge: Optional[str] = None, 
-    assertion_payload: Optional[StepUpAssertion] = Body(None)
+    auth: Optional[StepUpAssertion] = Body(None)
 ) -> DeletionRequestOut:
-    is_verified = verify_step_up("finalize", request_id, operator_id, challenge, assertion_payload)
+    is_verified = verify_step_up("finalize", request_id, auth)
     return DeletionRequestOut(**finalize_deletion_request(request_id, step_up_verified=is_verified))
 
 @app.get('/audit-events')

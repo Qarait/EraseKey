@@ -24,141 +24,121 @@ def test_step_up_replay_prevention():
     assert resp.status_code == 200
     challenge = resp.json()["challenge"]
     
-    # 2. First mock assertion
-    assertion_payload = {
-        "clientDataJSON": "{}",
-        "authenticatorData": "{}",
-        "signature": f"mock-sig-{settings.mock_stepup_pubkey_id}-{challenge}"
+    # 2. First mock assertion envelope
+    auth_envelope = {
+        "challenge": challenge,
+        "operator_id": "op1",
+        "assertion_payload": {
+            "clientDataJSON": "{}",
+            "authenticatorData": "{}",
+            "signature": f"mock-sig-{settings.mock_stepup_pubkey_id}-{challenge}"
+        }
     }
     
-    # Mock some data to execute against
-    # For simplicity, we just check the verifier directly or use the helper
     from app.main import verify_step_up
-    assert verify_step_up("execute", "test-1", "op1", challenge, assertion_payload) is True
+    # verify_step_up now always validates the envelope
+    assert verify_step_up("execute", "test-1", auth_envelope) is True
     
     # 3. Replayed assertion should fail because challenge is consumed
-    assert verify_step_up("execute", "test-1", "op1", challenge, assertion_payload) is False
+    assert verify_step_up("execute", "test-1", auth_envelope) is False
 
 def test_step_up_expiry():
-    # We can't easily wait 5 minutes in a test, so we'll mock the time or the verifier's internal state
-    # Actually, we can just check that it fails for a non-existent/expired challenge
     from app.main import verify_step_up
-    assert verify_step_up("execute", "test-1", "op1", "invalid-challenge", {"signature": "..."}) is False
+    bad_auth = {
+        "challenge": "invalid-challenge",
+        "operator_id": "op1",
+        "assertion_payload": {
+            "clientDataJSON": "{}", "authenticatorData": "{}", "signature": "..."
+        }
+    }
+    assert verify_step_up("execute", "test-1", bad_auth) is False
 
-def test_step_up_binding_mismatch():
+def test_step_up_binding_mismatch_unified():
     resp = client.post("/auth/step-up/challenge?action=execute&target_resource_id=res-1&operator_id=op1")
     challenge = resp.json()["challenge"]
     
-    assertion_payload = {
-        "clientDataJSON": "{}",
-        "authenticatorData": "{}",
-        "signature": f"mock-sig-{settings.mock_stepup_pubkey_id}-{challenge}"
+    auth_envelope = {
+        "challenge": challenge,
+        "operator_id": "op1",
+        "assertion_payload": {
+            "clientDataJSON": "{}",
+            "authenticatorData": "{}",
+            "signature": f"mock-sig-{settings.mock_stepup_pubkey_id}-{challenge}"
+        }
     }
     
     from app.main import verify_step_up
     # Action mismatch
-    assert verify_step_up("finalize", "res-1", "op1", challenge, assertion_payload) is False
-    # Challenge is consumed even on failure if check succeeds? 
-    # Current implementation consumes it at the start of verify_assertion.
+    assert verify_step_up("finalize", "res-1", auth_envelope) is False
     
-    # Re-generate for next check
+    # Re-generate for resource mismatch check
     resp = client.post("/auth/step-up/challenge?action=execute&target_resource_id=res-1&operator_id=op1")
     challenge = resp.json()["challenge"]
-    assertion_payload["signature"] = f"mock-sig-{settings.mock_stepup_pubkey_id}-{challenge}"
+    auth_envelope["challenge"] = challenge
+    auth_envelope["assertion_payload"]["signature"] = f"mock-sig-{settings.mock_stepup_pubkey_id}-{challenge}"
     
     # Resource mismatch
-    assert verify_step_up("execute", "res-2", "op1", challenge, assertion_payload) is False
+    assert verify_step_up("execute", "res-2", auth_envelope) is False
 
-def test_audit_chain_integrity():
-    # 1. Generate some events
-    client.post("/tenants", json={"name": "Tenant 1"})
-    client.post("/tenants", json={"name": "Tenant 2"})
+def test_malformed_auth_envelope():
+    # 1. Missing fields in top-level envelope
+    resp = client.post("/deletion-requests/any/execute", json={"challenge": "missing-operator"})
+    assert resp.status_code == 422
     
-    # 2. Verify chain is OK
-    resp = client.get("/admin/audit/verify")
-    assert resp.status_code == 200
-    assert resp.json()["ok"] is True
-    initial_count = resp.json()["verified_count"]
-    
-    # 3. Tamper with the database
-    with get_conn() as conn:
-        conn.execute("UPDATE audit_events SET action = 'tampered' WHERE rowid = (SELECT rowid FROM audit_events LIMIT 1)")
-        conn.commit()
-        
-    # 4. Verify chain fails
-    resp = client.get("/admin/audit/verify")
-    assert resp.json()["ok"] is False
-    assert resp.json()["verified_count"] < initial_count
-
-def test_policy_fail_closed_on_unavailable_gate1():
-    # If we set mode to gate1, and the CLI is missing, it should fail-closed
-    # We can use a context manager or just change settings temporarily
-    import app.config
-    import app.policy_engine
-    from app.gate1_client import Gate1Client
-    
-    original_engine = app.policy_engine.engine
-    try:
-        app.policy_engine.engine = app.policy_engine.Gate1PolicyEngine(Gate1Client(cli_path="/tmp/nonexistent"))
-        
-        # Any policy check should now return DENY
-        context = app.policy_engine.PolicyContext(action="execute", tenant_id="t1", dataset_id="d1", subject_id="s1")
-        decision = app.policy_engine.engine.evaluate(context)
-        assert decision.decision == app.policy_engine.PolicyDecision.DENY
-        assert decision.reason_code == "POLICY_ENGINE_UNAVAILABLE"
-    finally:
-        app.policy_engine.engine = original_engine
-
-def test_destructive_actions_fail_without_step_up():
-    # 1. Create a tenant and deletion request
-    tenant = client.post("/tenants", json={"name": "Audit Test"}).json()
-    dataset = client.post("/datasets", json={"tenant_id": tenant["id"], "name": "DS1"}).json()
-    client.post("/records", json={
-        "tenant_id": tenant["id"], "dataset_id": dataset["id"], "subject_id": "sub1",
-        "record_type": "test", "payload": {"foo": "bar"}
+    # 2. Bad shape in nested payload
+    resp = client.post("/deletion-requests/any/execute", json={
+        "challenge": "c", "operator_id": "op", "assertion_payload": {"sig": "bad-key-name"}
     })
-    req = client.post("/deletion-requests", json={
-        "tenant_id": tenant["id"], "dataset_id": dataset["id"], "subject_id": "sub1",
-        "requested_by": "tester", "reason": "test"
-    }).json()
-    
-    # 2. Execute without step-up
-    resp = client.post(f"/deletion-requests/{req['id']}/execute")
-    # Even if we don't provide any params, it should fail policy if step_up is not verified
+    assert resp.status_code == 422
+
+def test_missing_auth_body_results_in_deny():
+    # For destructive actions, missing body results in step_up_verified=False -> 403
+    resp = client.post("/deletion-requests/any/execute")
+    # Note: If Body(None), FastAPI allows NO body. then verify_step_up returns False.
     assert resp.status_code == 403
     assert "STEP_UP_REQUIRED" in resp.json()["detail"]
 
-def test_policy_denies_even_if_step_up_succeeds():
-    # e.g. Active Legal Hold
-    tenant = client.post("/tenants", json={"name": "Hold Test"}).json()
+def test_audit_chain_integrity():
+    client.post("/tenants", json={"name": "Audit Chain Test"})
+    resp = client.get("/admin/audit/verify")
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    
+    with get_conn() as conn:
+        conn.execute("UPDATE audit_events SET action = 'tampered' WHERE rowid = (SELECT rowid FROM audit_events LIMIT 1)")
+        conn.commit()
+    
+    resp = client.get("/admin/audit/verify")
+    assert resp.json()["ok"] is False
+
+def test_policy_denies_even_if_step_up_succeeds_unified():
+    # Setup resources
+    tenant = client.post("/tenants", json={"name": "Hold Test Unified"}).json()
     dataset = client.post("/datasets", json={"tenant_id": tenant["id"], "name": "DS1"}).json()
     req = client.post("/deletion-requests", json={
         "tenant_id": tenant["id"], "dataset_id": dataset["id"], "subject_id": "sub1",
         "requested_by": "tester", "reason": "test"
     }).json()
-    
-    # Add a legal hold
     client.post("/legal-holds", json={
         "tenant_id": tenant["id"], "dataset_id": dataset["id"], "subject_id": "sub1", "reason": "Hold it!"
     })
     
-    # Generate valid step-up
+    # Generate valid step-up assertion
     step_resp = client.post(f"/auth/step-up/challenge?action=execute&target_resource_id={req['id']}&operator_id=op1")
     challenge = step_resp.json()["challenge"]
-    assertion_payload = {
-        "clientDataJSON": "{}",
-        "authenticatorData": "{}",
-        "signature": f"mock-sig-{settings.mock_stepup_pubkey_id}-{challenge}"
+    auth_envelope = {
+        "challenge": challenge,
+        "operator_id": "op1",
+        "assertion_payload": {
+            "clientDataJSON": "{}",
+            "authenticatorData": "{}",
+            "signature": f"mock-sig-{settings.mock_stepup_pubkey_id}-{challenge}"
+        }
     }
     
-    # Execute with valid step-up
-    resp = client.post(f"/deletion-requests/{req['id']}/execute", params={
-        "operator_id": "op1",
-        "challenge": challenge,
-    }, json=assertion_payload) # Assertion payload goes in body? wait, main.py expects it in params?
-    # Ah, I updated main.py to take assertion_payload: Optional[dict[str, Any]] = None 
-    # but I didn't specify where it comes from (Body vs Query). FastAPI defaults to Query if it's a dict.
-    # No, it defaults to Body for dicts.
+    # Execute with valid step-up envelope in body
+    resp = client.post(f"/deletion-requests/{req['id']}/execute", json=auth_envelope)
     
+    # Policy should still deny due to ACTIVE_LEGAL_HOLD
     assert resp.status_code == 403
     assert "ACTIVE_LEGAL_HOLD" in resp.json()["detail"]

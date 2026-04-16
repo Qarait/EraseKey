@@ -23,7 +23,7 @@ from app.key_providers import MockKmsProvider, KeyProviderError
 
 class EraseKeyFlowTests(unittest.TestCase):
     def _get_step_up_params(self, action: str, resource_id: str, operator_id: str = "op1") -> dict[str, Any]:
-        """Helper to generate valid mock step-up assertion parameters and payload."""
+        """Helper to generate valid mock step-up assertion envelope for the request body."""
         from app.config import settings
         resp = self.client.post(f"/auth/step-up/challenge?action={action}&target_resource_id={resource_id}&operator_id={operator_id}")
         challenge = resp.json()["challenge"]
@@ -33,8 +33,11 @@ class EraseKeyFlowTests(unittest.TestCase):
             "signature": f"mock-sig-{settings.mock_stepup_pubkey_id}-{challenge}"
         }
         return {
-            "params": {"operator_id": operator_id, "challenge": challenge},
-            "json": assertion_payload
+            "json": {
+                "challenge": challenge,
+                "operator_id": operator_id,
+                "assertion_payload": assertion_payload
+            }
         }
 
     def setUp(self) -> None:

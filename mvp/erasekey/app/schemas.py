@@ -132,9 +132,15 @@ class StepUpChallenge(BaseModel):
     operator_id: str
 
 
+class WebAuthnAssertion(BaseModel):
+    clientDataJSON: str
+    authenticatorData: str
+    signature: str
+
+
 class StepUpAssertion(BaseModel):
     challenge: str
-    assertion_payload: dict[str, Any]  # Mock WebAuthn assertion payload
+    assertion_payload: WebAuthnAssertion
     operator_id: str
 
 
