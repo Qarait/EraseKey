@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional, Any, Union
 
-from fastapi import FastAPI, Body
+from fastapi import FastAPI, Body, HTTPException
 
 from .config import settings
 from .db import init_db
@@ -44,6 +44,7 @@ from .services import (
     cancel_deletion_request,
     finalize_deletion_request,
     finalize_due_deletions,
+    ActorType,
 )
 from .auth import verifier
 from . import utils
