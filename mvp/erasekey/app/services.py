@@ -530,13 +530,13 @@ def create_deletion_request(payload: DeletionRequestCreate) -> dict[str, Any]:
         }
         conn.execute(
             """
-            INSERT INTO deletion_requests (id, tenant_id, dataset_id, subject_id, requested_by, reason, status, blocked_reason, created_at, executed_at, canceled_at, finalized_at, evidence_json, request_hash)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO deletion_requests (id, tenant_id, dataset_id, subject_id, requested_by, reason, status, blocked_reason, created_at, executed_at, canceled_at, finalized_at, evidence_json, request_hash, step_up_authorized)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 record['id'], record['tenant_id'], record['dataset_id'], record['subject_id'],
                 record['requested_by'], record['reason'], record['status'], record['blocked_reason'],
-                record['created_at'], None, None, None, None, record['request_hash']
+                record['created_at'], None, None, None, None, record['request_hash'], 0
             ),
         )
         _audit(conn, 'deletion_request', record['id'], 'deletion_request.created', record)
@@ -559,11 +559,11 @@ def execute_deletion_request(request_id: str, step_up_verified: bool = False, ac
         request_item = _row_to_dict(row) or {}
 
         if request_item['status'] != RequestStatus.pending.value:
-            # We allow re-executing if blocked or scheduled? For now just block.
+            # We allow re-executing if blocked, canceled, or scheduled (idempotent skip)
             if request_item['status'] == RequestStatus.scheduled.value:
                 return request_item
-            if request_item['status'] != RequestStatus.blocked.value:
-                raise HTTPException(status_code=400, detail='Request is not in a states that can be executed.')
+            if request_item['status'] not in {RequestStatus.blocked.value, RequestStatus.canceled.value}:
+                raise HTTPException(status_code=400, detail='Request is not in a state that can be executed.')
 
         # Policy Check
         holds = _find_active_holds(
@@ -946,7 +946,8 @@ def finalize_due_deletions() -> list[str]:
     due_request_ids = []
     with get_conn() as conn:
         now = utils.utc_now()
-        # Join deletion_requests with subject_keys to find requests where keys are ready for destruction
+        # Find scheduled requests where keys are ready for destruction
+        # Crucial for Mission 3: Only pick up requests with verified authorization
         rows = conn.execute(
             """
             SELECT DISTINCT dr.id
@@ -955,6 +956,7 @@ def finalize_due_deletions() -> list[str]:
                AND dr.dataset_id = sk.dataset_id
                AND dr.subject_id = sk.subject_id
             WHERE dr.status = 'scheduled'
+              AND dr.step_up_authorized = 1
               AND sk.key_state = 'pending_erasure'
               AND sk.pending_deletion_until <= ?
             """,
