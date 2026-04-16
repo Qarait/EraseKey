@@ -118,7 +118,7 @@ class EvidenceOut(BaseModel):
     request_id: str
     status: RequestStatus
     evidence: dict[str, Any]
-    audit_event_id: Optional[int] = None
+    audit_event_id: Optional[str] = None
     event_hash: Optional[str] = None
     prev_hash: Optional[str] = None
     chain_version: int = 1
