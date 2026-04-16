@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Any, Union
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Body
 
 from .config import settings
 from .db import init_db
@@ -112,7 +112,7 @@ def verify_step_up(
     target_resource_id: str,
     operator_id: Optional[str] = None,
     challenge: Optional[str] = None,
-    assertion_payload: Optional[StepUpAssertion] = None
+    assertion_payload: Optional[Union[StepUpAssertion, dict[str, Any]]] = None
 ) -> bool:
     """
     Helper to verify step-up if provided.
@@ -120,9 +120,15 @@ def verify_step_up(
     """
     if not challenge or not assertion_payload or not operator_id:
         return False
+    
+    if hasattr(assertion_payload, "model_dump"):
+        p_dict = assertion_payload.model_dump()
+    else:
+        p_dict = assertion_payload
+
     return verifier.verify_assertion(
         challenge=challenge,
-        assertion_payload=assertion_payload.model_dump(),
+        assertion_payload=p_dict,
         action=action,
         resource_id=target_resource_id,
         operator_id=operator_id
@@ -179,7 +185,7 @@ def api_release_legal_hold(
     hold_id: str, 
     operator_id: Optional[str] = None, 
     challenge: Optional[str] = None, 
-    assertion_payload: Optional[StepUpAssertion] = None
+    assertion_payload: Optional[StepUpAssertion] = Body(None)
 ) -> LegalHoldOut:
     is_verified = verify_step_up("release_legal_hold", hold_id, operator_id, challenge, assertion_payload)
     return LegalHoldOut(**release_legal_hold(hold_id, step_up_verified=is_verified))
@@ -200,7 +206,7 @@ def api_execute_deletion_request(
     request_id: str,
     operator_id: Optional[str] = None, 
     challenge: Optional[str] = None, 
-    assertion_payload: Optional[StepUpAssertion] = None
+    assertion_payload: Optional[StepUpAssertion] = Body(None)
 ) -> DeletionRequestOut:
     is_verified = verify_step_up("execute", request_id, operator_id, challenge, assertion_payload)
     return DeletionRequestOut(**execute_deletion_request(request_id, step_up_verified=is_verified))
@@ -215,7 +221,7 @@ def api_cancel_deletion_request(
     request_id: str,
     operator_id: Optional[str] = None, 
     challenge: Optional[str] = None, 
-    assertion_payload: Optional[StepUpAssertion] = None
+    assertion_payload: Optional[StepUpAssertion] = Body(None)
 ) -> DeletionRequestOut:
     is_verified = verify_step_up("cancel", request_id, operator_id, challenge, assertion_payload)
     return DeletionRequestOut(**cancel_deletion_request(request_id, step_up_verified=is_verified))
@@ -225,7 +231,7 @@ def api_finalize_deletion_request(
     request_id: str,
     operator_id: Optional[str] = None, 
     challenge: Optional[str] = None, 
-    assertion_payload: Optional[StepUpAssertion] = None
+    assertion_payload: Optional[StepUpAssertion] = Body(None)
 ) -> DeletionRequestOut:
     is_verified = verify_step_up("finalize", request_id, operator_id, challenge, assertion_payload)
     return DeletionRequestOut(**finalize_deletion_request(request_id, step_up_verified=is_verified))
