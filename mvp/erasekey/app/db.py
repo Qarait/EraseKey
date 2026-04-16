@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS deletion_requests (
     finalized_at TEXT,
     evidence_json TEXT,
     request_hash TEXT NOT NULL,
+    step_up_authorized INTEGER DEFAULT 0,
     FOREIGN KEY (tenant_id) REFERENCES tenants(id),
     FOREIGN KEY (dataset_id) REFERENCES datasets(id)
 );
@@ -136,13 +137,28 @@ def init_db() -> None:
         
         # 2. Add columns if missing (additive migration)
         cursor = conn.execute("PRAGMA table_info(audit_events)")
-        existing_cols = [row[1] for row in cursor.fetchall()]
-        if 'prev_hash' not in existing_cols:
+        existing_audit_cols = [row[1] for row in cursor.fetchall()]
+        if 'prev_hash' not in existing_audit_cols:
             conn.execute("ALTER TABLE audit_events ADD COLUMN prev_hash TEXT")
-        if 'event_hash' not in existing_cols:
+        if 'event_hash' not in existing_audit_cols:
             conn.execute("ALTER TABLE audit_events ADD COLUMN event_hash TEXT")
-        if 'chain_version' not in existing_cols:
+        if 'chain_version' not in existing_audit_cols:
             conn.execute("ALTER TABLE audit_events ADD COLUMN chain_version INTEGER DEFAULT 1")
+            
+        cursor = conn.execute("PRAGMA table_info(deletion_requests)")
+        existing_delreq_cols = [row[1] for row in cursor.fetchall()]
+        if 'step_up_authorized' not in existing_delreq_cols:
+            conn.execute("ALTER TABLE deletion_requests ADD COLUMN step_up_authorized INTEGER DEFAULT 0")
+            
+            # Strict Backfill: Only authorize requests that have a verifiable 'scheduled' audit event
+            conn.execute(
+                """
+                UPDATE deletion_requests 
+                SET step_up_authorized = 1 
+                WHERE status = 'scheduled' 
+                  AND id IN (SELECT entity_id FROM audit_events WHERE action = 'deletion_request.scheduled')
+                """
+            )
             
         conn.commit()
     finally:

@@ -8,9 +8,9 @@ from pydantic import BaseModel
 from .config import settings
 from .gate1_client import Gate1Client
 
-class PolicyDecision(str, Enum):
-    ALLOW = "allow"
-    DENY = "deny"
+class ActorType(str, Enum):
+    HUMAN = "human"
+    SYSTEM_WORKER = "system_worker"
 
 class PolicyContext(BaseModel):
     action: str
@@ -20,6 +20,9 @@ class PolicyContext(BaseModel):
     active_hold_present: bool = False
     retention_expired: bool = True
     step_up_verified: bool = False
+    actor_type: ActorType = ActorType.HUMAN
+    scheduled_and_due: bool = False
+    prior_execute_step_up_verified: bool = False
     operator_role: str = "operator"
     approvals_count: int = 0
     deletion_window_state: str = "active"
@@ -60,20 +63,38 @@ class LegacyPolicyEngine(PolicyEngine):
     Temporary local policy engine mimicking future gate1 behaviors.
     """
     def evaluate(self, context: PolicyContext) -> PolicyResponse:
-        # 1. Fail-closed: Ensure step-up is verified for destructive actions
+        # Destructive actions across all actor types
         destructive_actions = ["execute", "finalize", "release_hold", "release_legal_hold", "cancel"]
+        
+        # 1. System Worker Rules
+        if context.actor_type == ActorType.SYSTEM_WORKER:
+            if context.action == "finalize":
+                if not context.prior_execute_step_up_verified:
+                    return PolicyResponse(decision=PolicyDecision.DENY, reason_code="PRIOR_STEP_UP_MISSING")
+                if not context.scheduled_and_due:
+                    return PolicyResponse(decision=PolicyDecision.DENY, reason_code="NOT_DUE")
+                if context.active_hold_present:
+                    return PolicyResponse(decision=PolicyDecision.DENY, reason_code="ACTIVE_LEGAL_HOLD")
+                return PolicyResponse(decision=PolicyDecision.ALLOW, reason_code="OK")
+            
+            # System worker is NOT authorized for any other destructive actions
+            if context.action in destructive_actions:
+                 return PolicyResponse(decision=PolicyDecision.DENY, reason_code="SYSTEM_WORKER_UNAUTHORIZED")
+
+        # 2. Human Rules
+        # Fail-closed: Ensure step-up is verified for destructive actions initiated by humans
         if context.action in destructive_actions and not context.step_up_verified:
             return PolicyResponse(decision=PolicyDecision.DENY, reason_code="STEP_UP_REQUIRED")
 
-        # 2. Legal holds block execute and finalize
+        # Legal holds block execute and finalize
         if context.action in ["execute", "finalize"] and context.active_hold_present:
             return PolicyResponse(decision=PolicyDecision.DENY, reason_code="ACTIVE_LEGAL_HOLD")
 
-        # 3. Finalize requires retention to be expired (if applicable)
+        # Finalize requires retention to be expired (if applicable)
         if context.action == "finalize" and not context.retention_expired:
             return PolicyResponse(decision=PolicyDecision.DENY, reason_code="RETENTION_NOT_EXPIRED")
 
-        # 4. Default: allow for now in Legacy mode if no blocks triggered
+        # 3. Default: allow for now in Legacy mode if no blocks triggered
         return PolicyResponse(decision=PolicyDecision.ALLOW, reason_code="OK")
 
 # Global engine instance

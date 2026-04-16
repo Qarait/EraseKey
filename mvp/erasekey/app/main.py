@@ -189,8 +189,10 @@ def api_release_legal_hold(
     hold_id: str, 
     auth: Optional[StepUpAssertion] = Body(None)
 ) -> LegalHoldOut:
+    if auth is None:
+        raise HTTPException(status_code=403, detail="Policy Denied: STEP_UP_REQUIRED")
     is_verified = verify_step_up("release_legal_hold", hold_id, auth)
-    return LegalHoldOut(**release_legal_hold(hold_id, step_up_verified=is_verified))
+    return LegalHoldOut(**release_legal_hold(hold_id, step_up_verified=is_verified, actor_type=ActorType.HUMAN))
 
 
 @app.post('/deletion-requests', response_model=DeletionRequestOut, status_code=201)
@@ -208,8 +210,10 @@ def api_execute_deletion_request(
     request_id: str,
     auth: Optional[StepUpAssertion] = Body(None)
 ) -> DeletionRequestOut:
+    if auth is None:
+        raise HTTPException(status_code=403, detail="Policy Denied: STEP_UP_REQUIRED")
     is_verified = verify_step_up("execute", request_id, auth)
-    return DeletionRequestOut(**execute_deletion_request(request_id, step_up_verified=is_verified))
+    return DeletionRequestOut(**execute_deletion_request(request_id, step_up_verified=is_verified, actor_type=ActorType.HUMAN))
 
 
 @app.get('/deletion-requests/{request_id}/evidence', response_model=EvidenceOut)
@@ -221,16 +225,20 @@ def api_cancel_deletion_request(
     request_id: str,
     auth: Optional[StepUpAssertion] = Body(None)
 ) -> DeletionRequestOut:
+    if auth is None:
+        raise HTTPException(status_code=403, detail="Policy Denied: STEP_UP_REQUIRED")
     is_verified = verify_step_up("cancel", request_id, auth)
-    return DeletionRequestOut(**cancel_deletion_request(request_id, step_up_verified=is_verified))
+    return DeletionRequestOut(**cancel_deletion_request(request_id, step_up_verified=is_verified, actor_type=ActorType.HUMAN))
 
 @app.post('/deletion-requests/{request_id}/finalize', response_model=DeletionRequestOut)
 def api_finalize_deletion_request(
     request_id: str,
     auth: Optional[StepUpAssertion] = Body(None)
 ) -> DeletionRequestOut:
+    if auth is None:
+        raise HTTPException(status_code=403, detail="Policy Denied: STEP_UP_REQUIRED")
     is_verified = verify_step_up("finalize", request_id, auth)
-    return DeletionRequestOut(**finalize_deletion_request(request_id, step_up_verified=is_verified))
+    return DeletionRequestOut(**finalize_deletion_request(request_id, step_up_verified=is_verified, actor_type=ActorType.HUMAN))
 
 @app.get('/audit-events')
 def api_list_audit_events(entity_type: Optional[str] = None, entity_id: Optional[str] = None):

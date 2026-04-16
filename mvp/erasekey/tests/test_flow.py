@@ -273,10 +273,13 @@ class EraseKeyFlowTests(unittest.TestCase):
         # 5. Verify records are erased
         erased = self.client.get(f"/records/{record['id']}")
         self.assertEqual(erased.json()['erase_status'], 'cryptographically_erased')
+        from app.services import finalize_due_deletions
+        finalized = finalize_due_deletions()
+        self.assertEqual(len(finalized), 1)
 
-    @mock.patch('app.services.utils.utc_now_dt')
-    def test_worker_respects_new_legal_hold(self, mock_now_dt) -> None:
-        mock_now_dt.return_value = datetime(2026, 4, 15, tzinfo=timezone.utc)
+    def test_worker_respects_new_legal_hold_and_fails_closed(self) -> None:
+        from app.services import finalize_due_deletions
+        mock_now = datetime(2026, 4, 15, tzinfo=timezone.utc)
         tenant = self.client.post('/tenants', json={'name': 'HoldTest'}).json()
         dataset = self.client.post('/datasets', json={'tenant_id': tenant['id'], 'name': 'ds'}).json()
         
@@ -288,20 +291,88 @@ class EraseKeyFlowTests(unittest.TestCase):
         step_up = self._get_step_up_body("execute", del_req['id'])
         self.client.post(f"/deletion-requests/{del_req['id']}/execute", json=step_up)
         
-        # Time passes...
-        mock_now_dt.return_value = datetime(2026, 4, 25, tzinfo=timezone.utc)
-        
         # BUT: A legal hold is added at the last minute
-        self.client.post(
-            '/legal-holds',
-            json={'tenant_id': tenant['id'], 'dataset_id': dataset['id'], 'subject_id': 's2', 'reason': 'New Hold'}
+        with mock.patch('app.services.utils.utc_now_dt') as mock_now_dt:
+             mock_now_dt.return_value = datetime(2026, 4, 25, tzinfo=timezone.utc)
+             self.client.post(
+                '/legal-holds',
+                json={'tenant_id': tenant['id'], 'dataset_id': dataset['id'], 'subject_id': 's2', 'reason': 'New Hold'}
+             )
+        
+             # Worker should skip it despite being due
+             finalized = finalize_due_deletions()
+             self.assertEqual(len(finalized), 0)
+
+    def test_execute_auth_before_404_leakage(self) -> None:
+        # 1. No auth body, nonexistent resource => 403 (not 404)
+        resp = self.client.post("/deletion-requests/nonexistent-id-123/execute")
+        self.assertEqual(resp.status_code, 403)
+        self.assertIn("STEP_UP_REQUIRED", resp.json()['detail'])
+
+        # 2. No auth body, valid resource => 403
+        tenant = self.client.post('/tenants', json={'name': 'LeakTest'}).json()
+        dataset = self.client.post('/datasets', json={'tenant_id': tenant['id'], 'name': 'ds'}).json()
+        del_req = self.client.post('/deletion-requests', json={
+            'tenant_id': tenant['id'], 'dataset_id': dataset['id'], 'subject_id': 's', 'requested_by': 'b', 'reason': 'r'
+        }).json()
+        
+        resp = self.client.post(f"/deletion-requests/{del_req['id']}/execute")
+        self.assertEqual(resp.status_code, 403)
+
+        # 3. Valid auth body, nonexistent resource => 404
+        # We need a challenge tied to the nonexistent ID
+        step_up = self._get_step_up_body("execute", "nonexistent-id-123")
+        resp = self.client.post("/deletion-requests/nonexistent-id-123/execute", json=step_up)
+        self.assertEqual(resp.status_code, 404)
+
+    def test_worker_restrictions(self) -> None:
+        from app.policy_engine import PolicyContext, ActorType, engine
+        # Worker cannot cancel
+        ctx = PolicyContext(
+            action="cancel", tenant_id="t", dataset_id="d", subject_id="s",
+            actor_type=ActorType.SYSTEM_WORKER
         )
+        self.assertEqual(engine.evaluate(ctx).decision, "deny")
+
+        # Worker cannot release holds
+        ctx = PolicyContext(
+            action="release_hold", tenant_id="t", dataset_id="d", subject_id="s",
+            actor_type=ActorType.SYSTEM_WORKER
+        )
+        self.assertEqual(engine.evaluate(ctx).decision, "deny")
+
+    def test_worker_finalize_authorization_chain(self) -> None:
+        from app.services import finalize_deletion_request
+        from app.policy_engine import ActorType
         
-        from app.services import finalize_due_deletions
-        finalized = finalize_due_deletions()
+        tenant = self.client.post('/tenants', json={'name': 'ChainTest'}).json()
+        dataset = self.client.post('/datasets', json={'tenant_id': tenant['id'], 'name': 'ds'}).json()
+        del_req = self.client.post('/deletion-requests', json={
+            'tenant_id': tenant['id'], 'dataset_id': dataset['id'], 'subject_id': 's', 'requested_by': 'b', 'reason': 'r'
+        }).json()
         
-        # Worker should skip it despite being due
-        self.assertEqual(len(finalized), 0)
+        # 1. Manually executed without step-up authorized column set (mocked as if legacy or denial bypass)
+        # (Current execute_deletion_request will set it to 1 if verified)
+        # We'll test the policy result directly
+        
+        # scheduled request with NO prior authorization (step_up_authorized=0)
+        # simulate status=scheduled but auth=0
+        with get_conn() as conn:
+            conn.execute("UPDATE deletion_requests SET status='scheduled', step_up_authorized=0 WHERE id=?", (del_req['id'],))
+        
+        # Worker tries to finalize => denied
+        with self.assertRaises(HTTPException) as cm:
+            finalize_deletion_request(del_req['id'], actor_type=ActorType.SYSTEM_WORKER, scheduled_and_due=True)
+        self.assertEqual(cm.exception.status_code, 403)
+        self.assertIn("PRIOR_STEP_UP_MISSING", cm.exception.detail)
+
+        # 2. scheduled request WITH prior authorization (step_up_authorized=1)
+        with get_conn() as conn:
+            conn.execute("UPDATE deletion_requests SET step_up_authorized=1 WHERE id=?", (del_req['id'],))
+        
+        # Worker tries to finalize => Success
+        res = finalize_deletion_request(del_req['id'], actor_type=ActorType.SYSTEM_WORKER, scheduled_and_due=True)
+        self.assertEqual(res['status'], 'finalized')
         
         # Status should still be 'scheduled'
         updated_req = self.client.get(f"/deletion-requests/{del_req['id']}").json()

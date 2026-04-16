@@ -52,7 +52,7 @@ def test_step_up_expiry():
     }
     assert verify_step_up("execute", "test-1", bad_auth) is False
 
-def test_step_up_binding_mismatch_unified():
+def test_step_up_binding_mismatch():
     resp = client.post("/auth/step-up/challenge?action=execute&target_resource_id=res-1&operator_id=op1")
     challenge = resp.json()["challenge"]
     
@@ -109,7 +109,7 @@ def test_audit_chain_integrity():
     resp = client.get("/admin/audit/verify")
     assert resp.json()["ok"] is False
 
-def test_policy_denies_even_if_step_up_succeeds_unified():
+def test_policy_denies_even_if_step_up_succeeds():
     # Setup resources
     tenant = client.post("/tenants", json={"name": "Hold Test Unified"}).json()
     dataset = client.post("/datasets", json={"tenant_id": tenant["id"], "name": "DS1"}).json()
