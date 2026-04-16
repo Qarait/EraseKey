@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import sqlite3
@@ -21,13 +21,7 @@ from .schemas import (
     RequestStatus,
     EraseStatus,
 )
-from .utils import (
-    canonical_json,
-    new_id,
-    sha256_hex,
-    utc_now,
-    utc_now_dt,
-)
+from . import utils
 
 
 def _row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -43,12 +37,12 @@ def _audit(conn: sqlite3.Connection, entity_type: str, entity_id: str, action: s
         VALUES (?, ?, ?, ?, ?, ?)
         """,
         (
-            new_id('audit'),
+            utils.new_id('audit'),
             entity_type,
             entity_id,
             action,
-            canonical_json(payload),
-            utc_now(),
+            utils.canonical_json(payload),
+            utils.utc_now(),
         ),
     )
 
@@ -69,10 +63,10 @@ def _fetch_dataset(conn: sqlite3.Connection, dataset_id: str) -> dict[str, Any]:
 
 def create_tenant(payload: TenantCreate) -> dict[str, Any]:
     record = {
-        'id': new_id('tenant'),
+        'id': utils.new_id('tenant'),
         'name': payload.name.strip(),
         'kms_key_id': None,
-        'created_at': utc_now(),
+        'created_at': utils.utc_now(),
     }
     with get_conn() as conn:
         conn.execute(
@@ -93,12 +87,12 @@ def create_dataset(payload: DatasetCreate) -> dict[str, Any]:
     with get_conn() as conn:
         _fetch_tenant(conn, payload.tenant_id)
         record = {
-            'id': new_id('dataset'),
+            'id': utils.new_id('dataset'),
             'tenant_id': payload.tenant_id,
             'name': payload.name.strip(),
             'description': payload.description,
             'retention_days': payload.retention_days,
-            'created_at': utc_now(),
+            'created_at': utils.utc_now(),
         }
         try:
             conn.execute(
@@ -164,13 +158,13 @@ def create_legal_hold(payload: LegalHoldCreate) -> dict[str, Any]:
             if dataset['tenant_id'] != payload.tenant_id:
                 raise HTTPException(status_code=400, detail='Dataset does not belong to tenant.')
         record = {
-            'id': new_id('hold'),
+            'id': utils.new_id('hold'),
             'tenant_id': payload.tenant_id,
             'dataset_id': payload.dataset_id,
             'subject_id': payload.subject_id,
             'reason': payload.reason.strip(),
             'active': True,
-            'created_at': utc_now(),
+            'created_at': utils.utc_now(),
             'released_at': None,
         }
         conn.execute(
@@ -202,7 +196,7 @@ def release_legal_hold(hold_id: str) -> dict[str, Any]:
         if not bool(item['active']):
             item['active'] = False
             return item
-        released_at = utc_now()
+        released_at = utils.utc_now()
         conn.execute(
             'UPDATE legal_holds SET active = 0, released_at = ? WHERE id = ?',
             (released_at, hold_id),
@@ -226,7 +220,7 @@ def _build_encryption_context(tenant_id: str, dataset_id: str, subject_id: str, 
         "app": "erasekey",
         "tenant_id": tenant_id,
         "dataset_id": dataset_id,
-        "subject_ref": sha256_hex({"subject_id": subject_id}),
+        "subject_ref": utils.sha256_hex({"subject_id": subject_id}),
         "subject_key_id": subject_key_id,
         "key_version": str(key_version),
         "schema": "erasekey.subject_key.v2",
@@ -259,7 +253,7 @@ def _ensure_subject_key(conn: sqlite3.Connection, tenant_dict: dict[str, Any], d
         return existing, data_key
 
     version = _next_subject_key_version(conn, tenant_id, dataset_id, subject_id)
-    skey_id = new_id('skey')
+    skey_id = utils.new_id('skey')
     context = _build_encryption_context(tenant_id, dataset_id, subject_id, skey_id, version)
 
     provider = KeyResolver.resolve_provider(tenant_kms_key_id=tenant_dict.get('kms_key_id'))
@@ -281,7 +275,7 @@ def _ensure_subject_key(conn: sqlite3.Connection, tenant_dict: dict[str, Any], d
         'wrapped_key': wrapped_key,
         'wrapped_key_nonce': None,
         'key_state': KeyState.active.value,
-        'created_at': utc_now(),
+        'created_at': utils.utc_now(),
         'pending_deletion_until': None,
         'destroyed_at': None,
     }
@@ -314,7 +308,7 @@ def create_record(payload: RecordCreate) -> dict[str, Any]:
             raise HTTPException(status_code=400, detail='Dataset does not belong to tenant.')
 
         subject_key, data_key = _ensure_subject_key(conn, tenant_dict, payload.dataset_id, payload.subject_id)
-        record_id = new_id('rec')
+        record_id = utils.new_id('rec')
         aad = {
             'tenant_id': payload.tenant_id,
             'dataset_id': payload.dataset_id,
@@ -334,8 +328,8 @@ def create_record(payload: RecordCreate) -> dict[str, Any]:
             'record_type': payload.record_type,
             'ciphertext': ciphertext,
             'nonce': nonce,
-            'aad': canonical_json(aad),
-            'created_at': utc_now(),
+            'aad': utils.canonical_json(aad),
+            'created_at': utils.utc_now(),
         }
         conn.execute(
             """
@@ -452,11 +446,11 @@ def create_deletion_request(payload: DeletionRequestCreate) -> dict[str, Any]:
             'subject_id': payload.subject_id, 'requested_by': payload.requested_by.strip(),
             'reason': payload.reason.strip(),
         }
-        request_hash = sha256_hex(base_request)
+        request_hash = utils.sha256_hex(base_request)
         record = {
-            'id': new_id('delreq'), **base_request,
+            'id': utils.new_id('delreq'), **base_request,
             'status': status_value, 'blocked_reason': blocked_reason,
-            'created_at': utc_now(), 'executed_at': None, 'canceled_at': None, 'finalized_at': None,
+            'created_at': utils.utc_now(), 'executed_at': None, 'canceled_at': None, 'finalized_at': None,
             'request_hash': request_hash,
         }
         conn.execute(
@@ -506,7 +500,7 @@ def execute_deletion_request(request_id: str) -> dict[str, Any]:
             return request_item
 
         window = settings.deletion_window_days
-        now = utc_now()
+        now = utils.utc_now()
 
         if window == 0:
             return _finalize_deletion_internal(conn, request_item, now)
@@ -520,7 +514,7 @@ def execute_deletion_request(request_id: str) -> dict[str, Any]:
             (request_item['tenant_id'], request_item['dataset_id'], request_item['subject_id']),
         ).fetchall()
 
-        pending_until_obj = utc_now_dt() + timedelta(days=window)
+        pending_until_obj = utils.utc_now_dt() + timedelta(days=window)
         pending_until_str = pending_until_obj.isoformat()
         
         affected_keys = []
@@ -548,12 +542,12 @@ def execute_deletion_request(request_id: str) -> dict[str, Any]:
 
         conn.execute(
             'UPDATE deletion_requests SET status = ?, blocked_reason = NULL, executed_at = ?, evidence_json = ? WHERE id = ?',
-            (RequestStatus.scheduled.value, now, canonical_json(evidence), request_id),
+            (RequestStatus.scheduled.value, now, utils.canonical_json(evidence), request_id),
         )
         request_item['status'] = RequestStatus.scheduled.value
         request_item['blocked_reason'] = None
         request_item['executed_at'] = now
-        request_item['evidence_json'] = canonical_json(evidence) # to keep memory object fresh
+        request_item['evidence_json'] = utils.canonical_json(evidence) # to keep memory object fresh
         
         _audit(conn, 'deletion_request', request_id, 'deletion_request.scheduled', evidence)
         return request_item
@@ -612,14 +606,14 @@ def _finalize_deletion_internal(conn: sqlite3.Connection, request_item: dict[str
     status_field = RequestStatus.finalized.value
     conn.execute(
         'UPDATE deletion_requests SET status = ?, blocked_reason = NULL, executed_at = COALESCE(executed_at, ?), finalized_at = ?, evidence_json = ? WHERE id = ?',
-        (status_field, now, now, canonical_json(evidence), request_item['id']),
+        (status_field, now, now, utils.canonical_json(evidence), request_item['id']),
     )
     request_item['status'] = status_field
     request_item['blocked_reason'] = None
     if not request_item.get('executed_at'):
         request_item['executed_at'] = now
     request_item['finalized_at'] = now
-    request_item['evidence_json'] = canonical_json(evidence)
+    request_item['evidence_json'] = utils.canonical_json(evidence)
 
     _audit(conn, 'deletion_request', request_item['id'], 'deletion_request.finalized', evidence)
     return request_item
@@ -642,7 +636,7 @@ def finalize_deletion_request(request_id: str) -> dict[str, Any]:
         if holds:
              raise HTTPException(status_code=400, detail='Cannot finalize: Active legal hold exists.')
 
-        return _finalize_deletion_internal(conn, request_item, utc_now())
+        return _finalize_deletion_internal(conn, request_item, utils.utc_now())
 
 def cancel_deletion_request(request_id: str) -> dict[str, Any]:
     with get_conn() as conn:
@@ -654,7 +648,7 @@ def cancel_deletion_request(request_id: str) -> dict[str, Any]:
         if request_item['status'] != RequestStatus.scheduled.value:
             raise HTTPException(status_code=400, detail='Only scheduled requests can be canceled.')
 
-        now = utc_now()
+        now = utils.utc_now()
         
         # Revert keys
         conn.execute(
@@ -724,7 +718,7 @@ def finalize_due_deletions() -> list[str]:
     """
     due_request_ids = []
     with get_conn() as conn:
-        now = utc_now()
+        now = utils.utc_now()
         # Join deletion_requests with subject_keys to find requests where keys are ready for destruction
         rows = conn.execute(
             """
@@ -756,3 +750,4 @@ def finalize_due_deletions() -> list[str]:
             print(f"ERROR: Failed to finalize {request_id} automatically: {exc}")
 
     return finalized_ids
+

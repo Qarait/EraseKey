@@ -202,7 +202,7 @@ class EraseKeyFlowTests(unittest.TestCase):
         self.assertEqual(data['deletion_window_days'], 7)
         self.assertTrue(data['auto_finalization_enabled'])
 
-    @mock.patch('app.utils.utc_now_dt')
+    @mock.patch('app.services.utils.utc_now_dt')
     def test_automatic_finalization_worker(self, mock_now_dt) -> None:
         # 1. Setup: Start at T=0
         mock_now_dt.return_value = datetime(2026, 4, 15, tzinfo=timezone.utc)
@@ -222,6 +222,10 @@ class EraseKeyFlowTests(unittest.TestCase):
         # 2. Execute: Scheduling happens at T=0. Window is 7 days.
         self.client.post(f"/deletion-requests/{del_req['id']}/execute")
         
+        evidence_resp = self.client.get(f"/deletion-requests/{del_req['id']}/evidence")
+        evidence = evidence_resp.json()['evidence']
+        self.assertEqual(evidence['pending_deletion_until'], "2026-04-22T00:00:00+00:00")
+        
         # 3. Run worker at T+1 day: Should do nothing
         mock_now_dt.return_value = datetime(2026, 4, 16, tzinfo=timezone.utc)
         from app.services import finalize_due_deletions
@@ -238,7 +242,7 @@ class EraseKeyFlowTests(unittest.TestCase):
         erased = self.client.get(f"/records/{record['id']}")
         self.assertEqual(erased.json()['erase_status'], 'cryptographically_erased')
 
-    @mock.patch('app.utils.utc_now_dt')
+    @mock.patch('app.services.utils.utc_now_dt')
     def test_worker_respects_new_legal_hold(self, mock_now_dt) -> None:
         mock_now_dt.return_value = datetime(2026, 4, 15, tzinfo=timezone.utc)
         tenant = self.client.post('/tenants', json={'name': 'HoldTest'}).json()
