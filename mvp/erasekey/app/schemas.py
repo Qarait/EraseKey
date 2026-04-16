@@ -118,6 +118,33 @@ class EvidenceOut(BaseModel):
     request_id: str
     status: RequestStatus
     evidence: dict[str, Any]
+    audit_event_id: Optional[int] = None
+    event_hash: Optional[str] = None
+    prev_hash: Optional[str] = None
+    chain_version: int = 1
+
+
+class StepUpChallenge(BaseModel):
+    challenge: str
+    action: str
+    target_resource_id: str
+    expires_at: str
+    operator_id: str
+
+
+class StepUpAssertion(BaseModel):
+    challenge: str
+    assertion_payload: dict[str, Any]  # Mock WebAuthn assertion payload
+    operator_id: str
+
+
+class AuditVerificationResult(BaseModel):
+    ok: bool
+    verified_count: int
+    first_bad_event_id: Optional[int] = None
+    expected_hash: Optional[str] = None
+    actual_hash: Optional[str] = None
+    head_hash: Optional[str] = None
 
 
 class HealthOut(BaseModel):
@@ -130,3 +157,12 @@ class ProviderStatusOut(BaseModel):
     kms_key_id: Optional[str]
     deletion_window_days: int
     auto_finalization_enabled: bool
+    step_up_mode: str
+
+
+class SecurityStatusOut(BaseModel):
+    step_up_mode: str
+    policy_engine_mode: str
+    is_mock_mode: bool
+    operator_public_key_id: str
+

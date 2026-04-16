@@ -115,7 +115,10 @@ CREATE TABLE IF NOT EXISTS audit_events (
     entity_id TEXT NOT NULL,
     action TEXT NOT NULL,
     payload_json TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    prev_hash TEXT,
+    event_hash TEXT,
+    chain_version INTEGER DEFAULT 1
 );
 
 CREATE INDEX IF NOT EXISTS idx_audit_events_entity
@@ -128,8 +131,22 @@ def init_db() -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     try:
+        # 1. Ensure core schema exists
         conn.executescript(SCHEMA)
+        
+        # 2. Add columns if missing (additive migration)
+        cursor = conn.execute("PRAGMA table_info(audit_events)")
+        existing_cols = [row[1] for row in cursor.fetchall()]
+        if 'prev_hash' not in existing_cols:
+            conn.execute("ALTER TABLE audit_events ADD COLUMN prev_hash TEXT")
+        if 'event_hash' not in existing_cols:
+            conn.execute("ALTER TABLE audit_events ADD COLUMN event_hash TEXT")
+        if 'chain_version' not in existing_cols:
+            conn.execute("ALTER TABLE audit_events ADD COLUMN chain_version INTEGER DEFAULT 1")
+            
         conn.commit()
+    finally:
+        conn.close()
     finally:
         conn.close()
 

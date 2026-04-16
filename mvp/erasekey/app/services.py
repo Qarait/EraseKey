@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import sqlite3
@@ -22,6 +22,7 @@ from .schemas import (
     EraseStatus,
 )
 from . import utils
+from .policy_engine import PolicyContext, PolicyDecision, engine
 
 
 def _row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -30,11 +31,35 @@ def _row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
     return {key: row[key] for key in row.keys()}
 
 
-def _audit(conn: sqlite3.Connection, entity_type: str, entity_id: str, action: str, payload: dict[str, Any]) -> None:
+def _audit(conn: sqlite3.Connection, entity_type: str, entity_id: str, action: str, payload: dict[str, Any]) -> str:
+    # 1. Fetch previous hash
+    # Use rowid to ensure stable ordering for the chain
+    last_event = conn.execute(
+        "SELECT event_hash FROM audit_events ORDER BY rowid DESC LIMIT 1"
+    ).fetchone()
+    prev_hash = last_event['event_hash'] if last_event and last_event['event_hash'] else "none"
+
+    # 2. Build event core for hashing (precise and honest)
+    now = utils.utc_now()
+    event_core = {
+        "event_type": action,
+        "timestamp": now,
+        "actor": "system",  # In a real app, this would be the session user
+        "tenant_id": payload.get("tenant_id", "none"),
+        "entity_type": entity_type,
+        "entity_id": entity_id,
+        "payload": payload
+    }
+    
+    # 3. Compute hash: sha256("erasekey.audit.v1\n" + prev_hash + "\n" + canonical_json(event_core))
+    core_json = utils.canonical_json(event_core)
+    hash_input = f"erasekey.audit.v1\n{prev_hash}\n{core_json}"
+    event_hash = utils.sha256_hex(hash_input)
+
     conn.execute(
         """
-        INSERT INTO audit_events (id, entity_type, entity_id, action, payload_json, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO audit_events (id, entity_type, entity_id, action, payload_json, created_at, prev_hash, event_hash, chain_version)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             utils.new_id('audit'),
@@ -42,9 +67,13 @@ def _audit(conn: sqlite3.Connection, entity_type: str, entity_id: str, action: s
             entity_id,
             action,
             utils.canonical_json(payload),
-            utils.utc_now(),
+            now,
+            prev_hash,
+            event_hash,
+            1, # chain_version
         ),
     )
+    return event_hash
 
 
 def _fetch_tenant(conn: sqlite3.Connection, tenant_id: str) -> dict[str, Any]:
@@ -187,7 +216,7 @@ def create_legal_hold(payload: LegalHoldCreate) -> dict[str, Any]:
     return record
 
 
-def release_legal_hold(hold_id: str) -> dict[str, Any]:
+def release_legal_hold(hold_id: str, step_up_verified: bool = False) -> dict[str, Any]:
     with get_conn() as conn:
         row = conn.execute('SELECT * FROM legal_holds WHERE id = ?', (hold_id,)).fetchone()
         if row is None:
@@ -196,6 +225,22 @@ def release_legal_hold(hold_id: str) -> dict[str, Any]:
         if not bool(item['active']):
             item['active'] = False
             return item
+        
+        # Policy Check
+        context = PolicyContext(
+            action="release_legal_hold",
+            tenant_id=item['tenant_id'],
+            dataset_id=item['dataset_id'],
+            subject_id=item['subject_id'],
+            step_up_verified=step_up_verified
+        )
+        decision = engine.evaluate(context)
+        if decision.decision == PolicyDecision.DENY:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Policy Denied: {decision.reason_code}"
+            )
+
         released_at = utils.utc_now()
         conn.execute(
             'UPDATE legal_holds SET active = 0, released_at = ? WHERE id = ?',
@@ -476,7 +521,7 @@ def get_deletion_request(request_id: str) -> dict[str, Any]:
         return _row_to_dict(row) or {}
 
 
-def execute_deletion_request(request_id: str) -> dict[str, Any]:
+def execute_deletion_request(request_id: str, step_up_verified: bool = False) -> dict[str, Any]:
     with get_conn() as conn:
         row = conn.execute('SELECT * FROM deletion_requests WHERE id = ?', (request_id,)).fetchone()
         if row is None:
@@ -486,18 +531,38 @@ def execute_deletion_request(request_id: str) -> dict[str, Any]:
         if request_item['status'] in {RequestStatus.scheduled.value, RequestStatus.finalized.value}:
             return request_item
 
+        # Prepare Policy Context
         holds = _find_active_holds(
             conn, request_item['tenant_id'], request_item['dataset_id'], request_item['subject_id']
         )
-        if holds:
-            blocked_reason = f'Active legal hold count: {len(holds)}'
-            conn.execute(
-                'UPDATE deletion_requests SET status = ?, blocked_reason = ? WHERE id = ?',
-                (RequestStatus.blocked.value, blocked_reason, request_id),
-            )
-            request_item['status'] = RequestStatus.blocked.value
-            request_item['blocked_reason'] = blocked_reason
-            return request_item
+        
+        context = PolicyContext(
+            action="execute",
+            tenant_id=request_item['tenant_id'],
+            dataset_id=request_item['dataset_id'],
+            subject_id=request_item['subject_id'],
+            active_hold_present=len(holds) > 0,
+            step_up_verified=step_up_verified
+        )
+        decision = engine.evaluate(context)
+        
+        if decision.decision == PolicyDecision.DENY:
+            blocked_reason = f"Policy Denied: {decision.reason_code}"
+            
+            # If denied due to holds, we mark as blocked. Otherwise we might just raise exception.
+            if decision.reason_code == "ACTIVE_LEGAL_HOLD":
+                conn.execute(
+                    'UPDATE deletion_requests SET status = ?, blocked_reason = ? WHERE id = ?',
+                    (RequestStatus.blocked.value, blocked_reason, request_id),
+                )
+                request_item['status'] = RequestStatus.blocked.value
+                request_item['blocked_reason'] = blocked_reason
+                return request_item
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=blocked_reason
+                )
 
         window = settings.deletion_window_days
         now = utils.utc_now()
@@ -618,7 +683,7 @@ def _finalize_deletion_internal(conn: sqlite3.Connection, request_item: dict[str
     _audit(conn, 'deletion_request', request_item['id'], 'deletion_request.finalized', evidence)
     return request_item
 
-def finalize_deletion_request(request_id: str) -> dict[str, Any]:
+def finalize_deletion_request(request_id: str, step_up_verified: bool = False) -> dict[str, Any]:
     with get_conn() as conn:
         row = conn.execute('SELECT * FROM deletion_requests WHERE id = ?', (request_id,)).fetchone()
         if row is None:
@@ -630,15 +695,37 @@ def finalize_deletion_request(request_id: str) -> dict[str, Any]:
         if request_item['status'] != RequestStatus.scheduled.value:
              raise HTTPException(status_code=400, detail='Request is not scheduled.')
 
+        # Policy Check
         holds = _find_active_holds(
             conn, request_item['tenant_id'], request_item['dataset_id'], request_item['subject_id']
         )
-        if holds:
-             raise HTTPException(status_code=400, detail='Cannot finalize: Active legal hold exists.')
+        # Fetch dataset for retention check
+        ds_row = conn.execute("SELECT retention_days, created_at FROM datasets WHERE id = ?", (request_item['dataset_id'],)).fetchone()
+        retention_expired = True
+        if ds_row and ds_row['retention_days']:
+            created_at = datetime.fromisoformat(ds_row['created_at'])
+            expiry_date = created_at + timedelta(days=ds_row['retention_days'])
+            retention_expired = datetime.now(timezone.utc) > expiry_date
+            
+        context = PolicyContext(
+            action="finalize",
+            tenant_id=request_item['tenant_id'],
+            dataset_id=request_item['dataset_id'],
+            subject_id=request_item['subject_id'],
+            active_hold_present=len(holds) > 0,
+            step_up_verified=step_up_verified,
+            retention_expired=retention_expired
+        )
+        decision = engine.evaluate(context)
+        if decision.decision == PolicyDecision.DENY:
+             raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Policy Denied: {decision.reason_code}"
+            )
 
         return _finalize_deletion_internal(conn, request_item, utils.utc_now())
 
-def cancel_deletion_request(request_id: str) -> dict[str, Any]:
+def cancel_deletion_request(request_id: str, step_up_verified: bool = False) -> dict[str, Any]:
     with get_conn() as conn:
         row = conn.execute('SELECT * FROM deletion_requests WHERE id = ?', (request_id,)).fetchone()
         if row is None:
@@ -647,6 +734,21 @@ def cancel_deletion_request(request_id: str) -> dict[str, Any]:
 
         if request_item['status'] != RequestStatus.scheduled.value:
             raise HTTPException(status_code=400, detail='Only scheduled requests can be canceled.')
+
+        # Policy Check
+        context = PolicyContext(
+            action="cancel",
+            tenant_id=request_item['tenant_id'],
+            dataset_id=request_item['dataset_id'],
+            subject_id=request_item['subject_id'],
+            step_up_verified=step_up_verified
+        )
+        decision = engine.evaluate(context)
+        if decision.decision == PolicyDecision.DENY:
+             raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Policy Denied: {decision.reason_code}"
+            )
 
         now = utils.utc_now()
         
@@ -673,7 +775,13 @@ def cancel_deletion_request(request_id: str) -> dict[str, Any]:
 
 def get_evidence(request_id: str) -> dict[str, Any]:
     with get_conn() as conn:
-        row = conn.execute('SELECT id, status, evidence_json FROM deletion_requests WHERE id = ?', (request_id,)).fetchone()
+        row = conn.execute(
+            'SELECT dr.*, ae.id as audit_id, ae.event_hash, ae.prev_hash FROM deletion_requests dr '
+            'LEFT JOIN audit_events ae ON ae.entity_id = dr.id AND ae.action = "deletion_request.finalized" '
+            'WHERE dr.id = ?',
+            (request_id,)
+        ).fetchone()
+        
         if row is None:
             raise HTTPException(status_code=404, detail='Deletion request not found.')
         if row['evidence_json'] is None:
@@ -681,14 +789,88 @@ def get_evidence(request_id: str) -> dict[str, Any]:
                 status_code=status.HTTP_409_CONFLICT,
                 detail='Deletion request has no evidence yet. Execute it first.',
             )
+            
         return {
             'request_id': row['id'],
             'status': row['status'],
             'evidence': json.loads(row['evidence_json']),
+            'audit_event_id': row['audit_id'],
+            'event_hash': row['event_hash'],
+            'prev_hash': row['prev_hash'],
+            'chain_version': row.get('chain_version', 1)
         }
 
 
-def list_audit_events(entity_type: str | None = None, entity_id: str | None = None) -> list[dict[str, Any]]:
+def get_audit_head() -> str:
+    with get_conn() as conn:
+        row = conn.execute("SELECT event_hash FROM audit_events ORDER BY rowid DESC LIMIT 1").fetchone()
+        return row['event_hash'] if row else "none"
+
+
+def verify_audit_chain() -> dict[str, Any]:
+    """
+    Cryptographically verifies the entire audit chain.
+    Returns a result dict with success status and any found error.
+    """
+    verified_count = 0
+    with get_conn() as conn:
+        # We order by rowid to ensure stable insertion order verification
+        rows = conn.execute("SELECT * FROM audit_events ORDER BY rowid ASC").fetchall()
+        
+        expected_prev_hash = "none"
+        head_hash = "none"
+        
+        for row in rows:
+            event = _row_to_dict(row) or {}
+            
+            # 1. Verify prev_hash link
+            if event['prev_hash'] != expected_prev_hash:
+                return {
+                    "ok": False,
+                    "verified_count": verified_count,
+                    "first_bad_event_id": event['id'],
+                    "expected_hash": expected_prev_hash,
+                    "actual_hash": event['prev_hash'],
+                    "head_hash": head_hash
+                }
+            
+            # 2. Recompute current hash
+            payload = json.loads(event['payload_json'])
+            event_core = {
+                "event_type": event['action'],
+                "timestamp": event['created_at'],
+                "actor": "system",
+                "tenant_id": payload.get("tenant_id", "none"),
+                "entity_type": event['entity_type'],
+                "entity_id": event['entity_id'],
+                "payload": payload
+            }
+            core_json = utils.canonical_json(event_core)
+            hash_input = f"erasekey.audit.v1\n{event['prev_hash']}\n{core_json}"
+            calculated_hash = utils.sha256_hex(hash_input)
+            
+            if event['event_hash'] != calculated_hash:
+                return {
+                    "ok": False,
+                    "verified_count": verified_count,
+                    "first_bad_event_id": event['id'],
+                    "expected_hash": calculated_hash,
+                    "actual_hash": event['event_hash'],
+                    "head_hash": head_hash
+                }
+            
+            expected_prev_hash = calculated_hash
+            head_hash = calculated_hash
+            verified_count += 1
+            
+    return {
+        "ok": True,
+        "verified_count": verified_count,
+        "head_hash": head_hash
+    }
+
+
+def list_audit_events(entity_type: Optional[str] = None, entity_id: Optional[str] = None) -> list[dict[str, Any]]:
     with get_conn() as conn:
         sql = 'SELECT * FROM audit_events'
         params: list[Any] = []
@@ -701,7 +883,7 @@ def list_audit_events(entity_type: str | None = None, entity_id: str | None = No
             params.append(entity_id)
         if clauses:
             sql += ' WHERE ' + ' AND '.join(clauses)
-        sql += ' ORDER BY created_at DESC LIMIT 200'
+        sql += ' ORDER BY rowid DESC LIMIT 200'
         rows = conn.execute(sql, params).fetchall()
         results: list[dict[str, Any]] = []
         for row in rows:

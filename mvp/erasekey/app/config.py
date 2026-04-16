@@ -21,4 +21,12 @@ class Settings:
     # Allow specifying 0 for immediate deletion
     deletion_window_days: int = int(os.getenv('ERASEKEY_DELETION_WINDOW_DAYS', '7'))
 
+    step_up_mode: str = os.getenv('ERASEKEY_STEP_UP_MODE', 'mock').lower()
+    # mock_stepup_pubkey_id is used for the mock verification pattern in mock mode
+    mock_stepup_pubkey_id: str = os.getenv('ERASEKEY_MOCK_STEPUP_PUBKEY_ID', 'mock-operator-pubkey-001')
+
+    policy_engine_mode: str = os.getenv('ERASEKEY_POLICY_ENGINE_MODE', 'legacy').lower()
+    # gate1_socket or gate1_cli_path could be added here if needed for gate1 integration
+    gate1_cli_path: str = os.getenv('ERASEKEY_GATE1_CLI_PATH', 'gate1')
+
 settings = Settings()

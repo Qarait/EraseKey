@@ -19,7 +19,8 @@ from .schemas import (
     RecordOut,
     TenantCreate,
     TenantOut,
-    ProviderStatusOut,
+    AuditVerificationResult,
+    SecurityStatusOut,
 )
 from .services import (
     create_dataset,
@@ -30,6 +31,8 @@ from .services import (
     execute_deletion_request,
     get_deletion_request,
     get_evidence,
+    get_audit_head,
+    verify_audit_chain,
     list_audit_events,
     list_datasets,
     list_tenants,
@@ -39,6 +42,8 @@ from .services import (
     finalize_deletion_request,
     finalize_due_deletions,
 )
+from .auth import verifier
+from . import utils
 
 app = FastAPI(
     title='EraseKey API',
@@ -70,8 +75,59 @@ def api_provider_status() -> ProviderStatusOut:
         kms_mode=settings.kms_mode,
         kms_key_id=redacted_id,
         deletion_window_days=settings.deletion_window_days,
-        auto_finalization_enabled=True  # Logic implemented in services.py and worker.py
+        auto_finalization_enabled=True,
+        step_up_mode=settings.step_up_mode
     )
+
+
+@app.get('/admin/security-status', response_model=SecurityStatusOut)
+def api_security_status() -> SecurityStatusOut:
+    return SecurityStatusOut(
+        step_up_mode=settings.step_up_mode,
+        policy_engine_mode=settings.policy_engine_mode,
+        is_mock_mode=(settings.step_up_mode == "mock"),
+        operator_public_key_id=settings.mock_stepup_pubkey_id
+    )
+
+
+@app.post('/auth/step-up/challenge', response_model=StepUpChallenge)
+def api_generate_challenge(action: str, target_resource_id: str, operator_id: str) -> StepUpChallenge:
+    token = verifier.generate_challenge(action, target_resource_id, operator_id)
+    # 5 minute expiry is hardcoded in auth.py
+    expires_at = (utils.utc_now_dt() + utils.timedelta(minutes=5)).isoformat()
+    return StepUpChallenge(
+        challenge=token,
+        action=action,
+        target_resource_id=target_resource_id,
+        operator_id=operator_id,
+        expires_at=expires_at
+    )
+
+
+def verify_step_up(
+    action: str,
+    target_resource_id: str,
+    operator_id: Optional[str] = None,
+    challenge: Optional[str] = None,
+    assertion_payload: Optional[dict[str, Any]] = None
+) -> bool:
+    """
+    Helper to verify step-up if provided.
+    In a real app, this would be a FastAPI Dependency extracting from headers.
+    """
+    if not challenge or not assertion_payload or not operator_id:
+        return False
+    return verifier.verify_assertion(challenge, assertion_payload, action, target_resource_id, operator_id)
+
+
+@app.get('/admin/audit/verify', response_model=AuditVerificationResult)
+def api_verify_audit_chain() -> AuditVerificationResult:
+    return AuditVerificationResult(**verify_audit_chain())
+
+
+@app.get('/admin/audit/head')
+def api_get_audit_head():
+    return {"head_hash": get_audit_head()}
 
 
 @app.post('/tenants', response_model=TenantOut, status_code=201)
@@ -110,8 +166,14 @@ def api_create_legal_hold(payload: LegalHoldCreate) -> LegalHoldOut:
 
 
 @app.post('/legal-holds/{hold_id}/release', response_model=LegalHoldOut)
-def api_release_legal_hold(hold_id: str) -> LegalHoldOut:
-    return LegalHoldOut(**release_legal_hold(hold_id))
+def api_release_legal_hold(
+    hold_id: str, 
+    operator_id: Optional[str] = None, 
+    challenge: Optional[str] = None, 
+    assertion_payload: Optional[dict[str, Any]] = None
+) -> LegalHoldOut:
+    is_verified = verify_step_up("release_legal_hold", hold_id, operator_id, challenge, assertion_payload)
+    return LegalHoldOut(**release_legal_hold(hold_id, step_up_verified=is_verified))
 
 
 @app.post('/deletion-requests', response_model=DeletionRequestOut, status_code=201)
@@ -125,8 +187,14 @@ def api_get_deletion_request(request_id: str) -> DeletionRequestOut:
 
 
 @app.post('/deletion-requests/{request_id}/execute', response_model=DeletionRequestOut)
-def api_execute_deletion_request(request_id: str) -> DeletionRequestOut:
-    return DeletionRequestOut(**execute_deletion_request(request_id))
+def api_execute_deletion_request(
+    request_id: str,
+    operator_id: Optional[str] = None, 
+    challenge: Optional[str] = None, 
+    assertion_payload: Optional[dict[str, Any]] = None
+) -> DeletionRequestOut:
+    is_verified = verify_step_up("execute", request_id, operator_id, challenge, assertion_payload)
+    return DeletionRequestOut(**execute_deletion_request(request_id, step_up_verified=is_verified))
 
 
 @app.get('/deletion-requests/{request_id}/evidence', response_model=EvidenceOut)
