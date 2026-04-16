@@ -141,7 +141,7 @@ class StepUpAssertion(BaseModel):
 class AuditVerificationResult(BaseModel):
     ok: bool
     verified_count: int
-    first_bad_event_id: Optional[int] = None
+    first_bad_event_id: Optional[str] = None
     expected_hash: Optional[str] = None
     actual_hash: Optional[str] = None
     head_hash: Optional[str] = None

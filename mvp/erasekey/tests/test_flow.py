@@ -22,6 +22,21 @@ from app.key_providers import MockKmsProvider, KeyProviderError
 
 
 class EraseKeyFlowTests(unittest.TestCase):
+    def _get_step_up_params(self, action: str, resource_id: str, operator_id: str = "op1") -> dict[str, Any]:
+        """Helper to generate valid mock step-up assertion parameters and payload."""
+        from app.config import settings
+        resp = self.client.post(f"/auth/step-up/challenge?action={action}&target_resource_id={resource_id}&operator_id={operator_id}")
+        challenge = resp.json()["challenge"]
+        assertion_payload = {
+            "clientDataJSON": "{}",
+            "authenticatorData": "{}",
+            "signature": f"mock-sig-{settings.mock_stepup_pubkey_id}-{challenge}"
+        }
+        return {
+            "params": {"operator_id": operator_id, "challenge": challenge},
+            "json": assertion_payload
+        }
+
     def setUp(self) -> None:
         db_path = Path(os.environ['ERASEKEY_DB_PATH'])
         if db_path.exists():
@@ -53,7 +68,7 @@ class EraseKeyFlowTests(unittest.TestCase):
         self.assertEqual(readable.json()['erase_status'], 'readable')
         self.assertEqual(readable.json()['payload']['email'], 'user@example.com')
 
-        # Step 2: Schedule Deletion
+        # Step 2: Schedule Deletion (Requires Step-up)
         deletion_request = self.client.post(
             '/deletion-requests',
             json={
@@ -63,7 +78,9 @@ class EraseKeyFlowTests(unittest.TestCase):
         ).json()
         self.assertEqual(deletion_request['status'], 'pending')
 
-        executed = self.client.post(f"/deletion-requests/{deletion_request['id']}/execute")
+        # Destructive action: execute requires step-up
+        step_up = self._get_step_up_params("execute", deletion_request['id'])
+        executed = self.client.post(f"/deletion-requests/{deletion_request['id']}/execute", **step_up)
         self.assertEqual(executed.status_code, 200)
         self.assertEqual(executed.json()['status'], 'scheduled')
 
@@ -78,8 +95,9 @@ class EraseKeyFlowTests(unittest.TestCase):
         self.assertEqual(sched_evidence.json()['status'], 'scheduled')
         self.assertIn('pending timeline expiration', sched_evidence.json()['evidence']['message'])
 
-        # Step 5: Cancel
-        canceled = self.client.post(f"/deletion-requests/{deletion_request['id']}/cancel")
+        # Step 5: Cancel (Requires Step-up)
+        step_up = self._get_step_up_params("cancel", deletion_request['id'])
+        canceled = self.client.post(f"/deletion-requests/{deletion_request['id']}/cancel", **step_up)
         self.assertEqual(canceled.status_code, 200)
         self.assertEqual(canceled.json()['status'], 'canceled')
 
@@ -88,11 +106,13 @@ class EraseKeyFlowTests(unittest.TestCase):
         self.assertEqual(readable_again.json()['erase_status'], 'readable')
         self.assertIsNotNone(readable_again.json()['payload'])
 
-        # Step 7: Schedule again and Finalize
-        sched_again = self.client.post(f"/deletion-requests/{deletion_request['id']}/execute")
+        # Step 7: Schedule again and Finalize (Requires Step-up)
+        step_up_exec = self._get_step_up_params("execute", deletion_request['id'])
+        sched_again = self.client.post(f"/deletion-requests/{deletion_request['id']}/execute", **step_up_exec)
         self.assertEqual(sched_again.json()['status'], 'scheduled')
 
-        finalized = self.client.post(f"/deletion-requests/{deletion_request['id']}/finalize")
+        step_up_fin = self._get_step_up_params("finalize", deletion_request['id'])
+        finalized = self.client.post(f"/deletion-requests/{deletion_request['id']}/finalize", **step_up_fin)
         self.assertEqual(finalized.status_code, 200)
         self.assertEqual(finalized.json()['status'], 'finalized')
 
@@ -128,7 +148,8 @@ class EraseKeyFlowTests(unittest.TestCase):
             },
         ).json()
 
-        executed = self.client.post(f"/deletion-requests/{del_req['id']}/execute")
+        step_up = self._get_step_up_params("execute", del_req['id'])
+        executed = self.client.post(f"/deletion-requests/{del_req['id']}/execute", **step_up)
         self.assertEqual(executed.status_code, 200)
         self.assertEqual(executed.json()['status'], 'finalized')
 
@@ -160,11 +181,13 @@ class EraseKeyFlowTests(unittest.TestCase):
         execute = self.client.post(f"/deletion-requests/{del_req['id']}/execute")
         self.assertEqual(execute.json()['status'], 'blocked')
         
-        # Release hold
-        self.client.post(f"/legal-holds/{hold.json()['id']}/release")
+        # Release hold (Requires Step-up)
+        step_up_rel = self._get_step_up_params("release_legal_hold", hold.json()['id'])
+        self.client.post(f"/legal-holds/{hold.json()['id']}/release", **step_up_rel)
         
         # Execute succeeds
-        execute = self.client.post(f"/deletion-requests/{del_req['id']}/execute")
+        step_up_exec = self._get_step_up_params("execute", del_req['id'])
+        execute = self.client.post(f"/deletion-requests/{del_req['id']}/execute", **step_up_exec)
         self.assertEqual(execute.json()['status'], 'scheduled')
 
         # Place hold again
@@ -173,10 +196,11 @@ class EraseKeyFlowTests(unittest.TestCase):
             json={'tenant_id': tenant['id'], 'dataset_id': dataset['id'], 'subject_id': 'user_456', 'reason': 'Hold 2'},
         )
         
-        # Finalize fails due to new hold
-        fin = self.client.post(f"/deletion-requests/{del_req['id']}/finalize")
-        self.assertEqual(fin.status_code, 400)
-        self.assertIn('Active legal hold', fin.json()['detail'])
+        # Finalize fails due to new hold (Requires Step-up)
+        step_up = self._get_step_up_params("finalize", del_req['id'])
+        fin = self.client.post(f"/deletion-requests/{del_req['id']}/finalize", **step_up)
+        self.assertEqual(fin.status_code, 403)
+        self.assertIn('Policy Denied', fin.json()['detail'])
 
     def test_encryption_context_mismatch_fails_decrypt(self) -> None:
         provider = MockKmsProvider()
@@ -220,7 +244,8 @@ class EraseKeyFlowTests(unittest.TestCase):
         ).json()
         
         # 2. Execute: Scheduling happens at T=0. Window is 7 days.
-        self.client.post(f"/deletion-requests/{del_req['id']}/execute")
+        step_up = self._get_step_up_params("execute", del_req['id'])
+        self.client.post(f"/deletion-requests/{del_req['id']}/execute", **step_up)
         
         evidence_resp = self.client.get(f"/deletion-requests/{del_req['id']}/evidence")
         evidence = evidence_resp.json()['evidence']
@@ -253,7 +278,8 @@ class EraseKeyFlowTests(unittest.TestCase):
             json={'tenant_id': tenant['id'], 'dataset_id': dataset['id'], 'subject_id': 's2', 'requested_by': 'bot', 'reason': 'test'}
         ).json()
         
-        self.client.post(f"/deletion-requests/{del_req['id']}/execute")
+        step_up = self._get_step_up_params("execute", del_req['id'])
+        self.client.post(f"/deletion-requests/{del_req['id']}/execute", **step_up)
         
         # Time passes...
         mock_now_dt.return_value = datetime(2026, 4, 25, tzinfo=timezone.utc)
@@ -273,6 +299,19 @@ class EraseKeyFlowTests(unittest.TestCase):
         # Status should still be 'scheduled'
         updated_req = self.client.get(f"/deletion-requests/{del_req['id']}").json()
         self.assertEqual(updated_req['status'], 'scheduled')
+
+    def test_destructive_action_denied_without_step_up(self) -> None:
+        tenant = self.client.post('/tenants', json={'name': 'BadActor'}).json()
+        dataset = self.client.post('/datasets', json={'tenant_id': tenant['id'], 'name': 'ds'}).json()
+        del_req = self.client.post(
+            '/deletion-requests',
+            json={'tenant_id': tenant['id'], 'dataset_id': dataset['id'], 'subject_id': 's3', 'requested_by': 'bot', 'reason': 'test'}
+        ).json()
+        
+        # Execute without parameters or payload
+        resp = self.client.post(f"/deletion-requests/{del_req['id']}/execute")
+        self.assertEqual(resp.status_code, 403)
+        self.assertIn("STEP_UP_REQUIRED", resp.json()['detail'])
 
 if __name__ == '__main__':
     unittest.main()
