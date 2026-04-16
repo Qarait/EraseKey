@@ -19,6 +19,9 @@ from .schemas import (
     RecordOut,
     TenantCreate,
     TenantOut,
+    ProviderStatusOut,
+    StepUpChallenge,
+    StepUpAssertion,
     AuditVerificationResult,
     SecurityStatusOut,
 )
