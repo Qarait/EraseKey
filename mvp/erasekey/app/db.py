@@ -147,8 +147,7 @@ def init_db() -> None:
         conn.commit()
     finally:
         conn.close()
-    finally:
-        conn.close()
+
 
 
 @contextmanager
