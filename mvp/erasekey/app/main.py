@@ -131,10 +131,10 @@ def verify_step_up(
 
     # Pass the nested assertion payload to the verifier
     return verifier.verify_assertion(
-        challenge=validated_auth.challenge,
+        challenge_token=validated_auth.challenge,
         assertion_payload=validated_auth.assertion_payload.model_dump(),
         action=action,
-        resource_id=target_resource_id,
+        target_resource_id=target_resource_id,
         operator_id=validated_auth.operator_id
     )
 
