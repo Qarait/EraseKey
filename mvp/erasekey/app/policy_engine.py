@@ -8,6 +8,10 @@ from pydantic import BaseModel
 from .config import settings
 from .gate1_client import Gate1Client
 
+class PolicyDecision(str, Enum):
+    ALLOW = "allow"
+    DENY = "deny"
+
 class ActorType(str, Enum):
     HUMAN = "human"
     SYSTEM_WORKER = "system_worker"
