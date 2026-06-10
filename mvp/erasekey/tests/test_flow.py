@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 from app.db import init_db, get_conn
 from app.main import app
 from app.key_providers import MockKmsProvider, KeyProviderError
+from app.receipts import append_deletion_receipt, verify_receipt_log
 
 
 class EraseKeyFlowTests(unittest.TestCase):
@@ -552,13 +553,45 @@ class EraseKeyFlowTests(unittest.TestCase):
         })
         self.assertEqual(blocked_write.status_code, 409)
 
-        reconciled = self.client.post('/admin/restore/reconcile')
-        self.assertEqual(reconciled.status_code, 200)
-        self.assertIn(key_id, reconciled.json()['re_erased_key_ids'])
+        with TestClient(app) as startup_client:
+            reconciliation = startup_client.app.state.startup_reconciliation
+            self.assertIn(key_id, reconciliation['re_erased_key_ids'])
 
         erased_again = self.client.get(f"/records/{record['id']}")
         self.assertEqual(erased_again.json()['erase_status'], 'cryptographically_erased')
+        restored_request = self.client.get(
+            f"/deletion-requests/{request['id']}"
+        ).json()
+        self.assertEqual(restored_request['status'], 'finalized')
         self.assertTrue(self.client.get('/admin/audit/verify').json()['ok'])
+
+    def test_receipt_append_is_idempotent_for_request(self) -> None:
+        arguments = {
+            'tenant_id': 'tenant-idempotent',
+            'dataset_id': 'dataset-idempotent',
+            'subject_id': 'subject-idempotent',
+            'request_id': 'request-idempotent',
+            'request_hash': 'request-hash-idempotent',
+            'finalized_at': '2026-04-15T00:00:00+00:00',
+            'audit_event_hash': 'audit-hash-idempotent',
+        }
+
+        first = append_deletion_receipt(**arguments)
+        second = append_deletion_receipt(**arguments)
+
+        self.assertEqual(first, second)
+        self.assertEqual(verify_receipt_log()['receipt_count'], 1)
+
+    def test_startup_fails_closed_for_invalid_receipt_journal(self) -> None:
+        receipt_path = Path(os.environ['ERASEKEY_RECEIPT_LOG_PATH'])
+        receipt_path.write_text('{"malformed": true}\n', encoding='utf-8')
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            'Startup reconciliation failed',
+        ):
+            with TestClient(app):
+                pass
 
 if __name__ == '__main__':
     unittest.main()

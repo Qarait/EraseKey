@@ -12,7 +12,7 @@ old state.
 
 ## Decision
 
-Finalized deletions produce an HMAC-signed receipt in an append-only journal
+Finalized deletions produce an HMAC-signed receipt in an append-oriented journal
 outside SQLite.
 
 Each receipt contains:
