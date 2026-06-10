@@ -1,6 +1,6 @@
 # Architecture
 
-## MVP architecture
+## Architecture
 
 ```text
 Client / Privacy Ops
@@ -53,7 +53,7 @@ Deletion is often requested per person, not per entire dataset. If you encrypt e
 5. Records encrypted under those keys become unreadable.
 6. An evidence object is written back to the request and the audit log.
 
-## Why ciphertext remains in the MVP
+## Why ciphertext remains
 That is deliberate. The product is modeling backup and cold-storage reality: data copies may continue to exist physically, but once key material is gone, those copies are no longer usable.
 
 ## Deletion continuity after restore
@@ -76,5 +76,7 @@ Replace the demo key wrapper with a real control plane:
 - Warehouse tombstones for analytics pipelines
 - Signed evidence bundles for auditors
 
-## Important limitation
-The MVP demonstrates cryptographic erasure mechanics. It does not claim to solve every real-world deletion problem by itself.
+## Limitations
+
+EraseKey demonstrates cryptographic deletion and restore reconciliation. It does
+not locate or delete arbitrary copies outside the systems integrated with it.

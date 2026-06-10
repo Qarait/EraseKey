@@ -19,12 +19,10 @@ def test_security_status():
     assert data["operator_public_key_id"] == settings.mock_stepup_pubkey_id
 
 def test_step_up_replay_prevention():
-    # 1. Generate challenge
     resp = client.post("/auth/step-up/challenge?action=execute&target_resource_id=test-1&operator_id=op1")
     assert resp.status_code == 200
     challenge = resp.json()["challenge"]
     
-    # 2. First mock assertion envelope
     auth_envelope = {
         "challenge": challenge,
         "operator_id": "op1",
@@ -38,7 +36,6 @@ def test_step_up_replay_prevention():
     from app.main import verify_step_up
     assert verify_step_up("execute", "test-1", auth_envelope) is True
     
-    # 3. Replayed assertion should fail because challenge is consumed
     assert verify_step_up("execute", "test-1", auth_envelope) is False
 
 def test_step_up_expiry():
@@ -80,11 +77,9 @@ def test_step_up_binding_mismatch():
     assert verify_step_up("execute", "res-2", auth_envelope) is False
 
 def test_malformed_auth_envelope():
-    # 1. Missing fields in top-level envelope
     resp = client.post("/deletion-requests/any/execute", json={"challenge": "missing-operator"})
     assert resp.status_code == 422
     
-    # 2. Bad shape in nested payload
     resp = client.post("/deletion-requests/any/execute", json={
         "challenge": "c", "operator_id": "op", "assertion_payload": {"sig": "bad-key-name"}
     })

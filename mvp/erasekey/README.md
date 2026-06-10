@@ -1,24 +1,25 @@
-# EraseKey Restore Lab
+# EraseKey
 
-EraseKey is a restore-safe cryptographic-erasure experiment. It is deliberately
-not a privacy request portal, compliance dashboard, or connector marketplace.
+EraseKey demonstrates subject-scoped encryption and deletion that survives a
+stale database restore. It is a local engineering project, not a general privacy
+operations platform.
 
 Instead of pretending every copy of user data can be physically deleted immediately, this service encrypts subject-scoped records with envelope encryption and then makes them unreadable by destroying the wrapped subject keys. The ciphertext remains in place (mirroring backups/cold storage), but is rendered cryptographically unrecoverable.
 
-## Core Features
+## What it demonstrates
 
-- **Multi-Tenant & Dataset Scoped**: Organize keys and records by tenant and dataset.
-- **Subject-Scoped Keys**: Automatically manages cryptographic keys on a per-subject basis (e.g., per user).
-- **AWS KMS Integration**: Support for real AWS KMS as the Root Key Provider.
-- **Deletion Lifecycle**:
+- Tenant and dataset scoped records.
+- One envelope-encryption key per subject.
+- Mock and AWS KMS key providers.
+- A deletion lifecycle:
     - **Pending**: Request created but not yet executed.
     - **Scheduled**: Request executed; keys are in a "Pending Erasure" state for a mandatory waiting period. Access is blocked.
     - **Finalized**: Wrapped keys are destroyed; erasure is complete.
-- **Legal Holds**: Holds block both the transition to "Scheduled" and the final "Finalized" step.
-- **Audit Trail**: Every action (ingestion, hold, schedule, destroy) produces a signed-hash audit event.
-- **Deletion Receipts**: Finalization writes a signed receipt to an append-only journal outside SQLite.
-- **Restore Guard**: A stale SQLite restore can be scanned against the receipt journal and re-erased.
-- **Resurrection Prevention**: Scheduled or receipted subjects cannot receive new records.
+- Legal holds that block scheduling and finalization.
+- A hash-chained audit log.
+- Signed deletion receipts stored outside SQLite.
+- Reconciliation that removes keys resurrected by a stale restore.
+- Write blocking for subjects with pending or completed deletion.
 
 ## Tech Stack
 
@@ -99,10 +100,9 @@ EraseKey behavior is controlled by environment variables:
 The automated test `test_restore_reconciliation_re_erases_resurrected_key`
 executes this scenario end to end.
 
-## Security Boundary
+## Scope and security
 
-This repository is a local lab. Its API has no production authentication and
-must not be exposed to an untrusted network. The local HMAC journal demonstrates
-the protocol, but a real deployment should place receipts and signing keys in a
-separate trust domain such as an immutable object store and managed signing
-service.
+The API has no production authentication and should not be exposed to an
+untrusted network. The local HMAC journal is enough to demonstrate the restore
+protocol. A production design would keep receipts in immutable storage and use a
+managed signing key outside the database backup domain.

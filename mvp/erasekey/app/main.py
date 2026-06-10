@@ -120,24 +120,18 @@ def verify_step_up(
     target_resource_id: str,
     auth: Optional[Union[StepUpAssertion, dict[str, Any]]] = None
 ) -> bool:
-    """
-    Helper to verify step-up envelope against verifier.
-    Enforces strict Pydantic validation even for dictionary inputs.
-    """
+    """Validate and verify a step-up assertion."""
     if not auth:
         return False
     
-    # Enforce strict boundary validation
     try:
         if isinstance(auth, dict):
             validated_auth = StepUpAssertion.model_validate(auth)
         else:
             validated_auth = auth
     except Exception:
-        # Validation failure results in denied auth
         return False
 
-    # Pass the nested assertion payload to the verifier
     return verifier.verify_assertion(
         challenge_token=validated_auth.challenge,
         assertion_payload=validated_auth.assertion_payload.model_dump(),

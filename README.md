@@ -1,18 +1,13 @@
-# EraseKey Restore Lab
+# EraseKey
 
-EraseKey is a security engineering lab for one narrow question:
+EraseKey is a small FastAPI project that explores cryptographic deletion across
+database restores.
 
-> If an old database snapshot resurrects encrypted user data, can the system
-> remember that the subject was deleted and make the restored copy unreadable
-> again?
+Records are encrypted with per-subject data keys. Finalizing a deletion removes
+the wrapped key and writes a signed receipt outside the application database. If
+an old database snapshot later restores that key, the receipt can be used to
+find and destroy it again.
 
-It combines subject-scoped envelope encryption with an external signed deletion
-receipt journal. The journal survives independently of SQLite, blocks new writes
-for erased subjects, and drives re-erasure after a stale restore.
-
-## Project Structure
-
-- **[mvp/erasekey/](mvp/erasekey/)**: FastAPI restore-safety lab.
-- **docs/**: Architectural and product documentation.
-
-Please refer to [mvp/erasekey/README.md](mvp/erasekey/README.md) for installation and usage instructions.
+The implementation lives in [`mvp/erasekey`](mvp/erasekey). See its
+[README](mvp/erasekey/README.md) for setup, API details, and the restore
+simulation.
