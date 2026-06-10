@@ -14,6 +14,14 @@ class Settings:
     app_name: str = os.getenv('ERASEKEY_APP_NAME', 'EraseKey')
     database_path: str = os.getenv('ERASEKEY_DB_PATH', str(DATA_DIR / 'erasekey.db'))
     root_key_path: str = os.getenv('ERASEKEY_ROOT_KEY_PATH', str(DATA_DIR / '.demo_root_kek'))
+    receipt_log_path: str = os.getenv(
+        'ERASEKEY_RECEIPT_LOG_PATH',
+        str(DATA_DIR / 'deletion_receipts.jsonl'),
+    )
+    receipt_signing_key_path: str = os.getenv(
+        'ERASEKEY_RECEIPT_SIGNING_KEY_PATH',
+        str(DATA_DIR / '.receipt_signing_key'),
+    )
     
     kms_mode: str = os.getenv('ERASEKEY_KMS_MODE', 'mock').lower()
     aws_kms_key_id: str | None = os.getenv('ERASEKEY_AWS_KMS_KEY_ID')

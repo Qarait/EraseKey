@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from typing import Optional, Any, Union
 
 from fastapi import FastAPI, Body, HTTPException
@@ -24,6 +25,8 @@ from .schemas import (
     StepUpAssertion,
     AuditVerificationResult,
     SecurityStatusOut,
+    ReceiptVerificationOut,
+    RestoreReconciliationOut,
 )
 from .services import (
     create_dataset,
@@ -44,24 +47,28 @@ from .services import (
     cancel_deletion_request,
     finalize_deletion_request,
     finalize_due_deletions,
+    reconcile_deletion_receipts,
     ActorType,
 )
 from .auth import verifier
 from . import utils
+from .receipts import verify_receipt_log
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    init_db()
+    yield
 
 app = FastAPI(
     title='EraseKey API',
     version='0.1.0',
     description=(
-        'Deletion Assurance MVP: encrypts subject-scoped records with envelope encryption, '
-        'supports legal holds, and performs cryptographic erasure by destroying wrapped subject keys.'
+        'Restore-safe deletion continuity lab: encrypts subject-scoped records, '
+        'destroys wrapped keys, and re-applies erasure after stale restores.'
     ),
+    lifespan=lifespan,
 )
-
-
-@app.on_event('startup')
-def startup() -> None:
-    init_db()
 
 
 @app.get('/healthz', response_model=HealthOut)
@@ -148,6 +155,16 @@ def api_verify_audit_chain() -> AuditVerificationResult:
 @app.get('/admin/audit/head')
 def api_get_audit_head():
     return {"head_hash": get_audit_head()}
+
+
+@app.get('/admin/deletion-receipts/verify', response_model=ReceiptVerificationOut)
+def api_verify_deletion_receipts() -> ReceiptVerificationOut:
+    return ReceiptVerificationOut(**verify_receipt_log())
+
+
+@app.post('/admin/restore/reconcile', response_model=RestoreReconciliationOut)
+def api_reconcile_restored_data() -> RestoreReconciliationOut:
+    return RestoreReconciliationOut(**reconcile_deletion_receipts())
 
 
 @app.post('/tenants', response_model=TenantOut, status_code=201)
