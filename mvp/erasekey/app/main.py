@@ -56,8 +56,14 @@ from .receipts import verify_receipt_log
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
+async def lifespan(app: FastAPI):
     init_db()
+    try:
+        app.state.startup_reconciliation = reconcile_deletion_receipts()
+    except HTTPException as exc:
+        raise RuntimeError(
+            f"Startup reconciliation failed: {exc.detail}"
+        ) from exc
     yield
 
 app = FastAPI(

@@ -7,7 +7,8 @@ and the wrapped key needed to read it.
 The service encrypts records with per-subject data keys. Finalizing a deletion
 removes those wrapped keys and writes a signed receipt outside the application
 database. If stale database state later brings a key back, EraseKey can use the
-receipt to find and destroy it again.
+receipt to find and destroy it again. The API verifies and reconciles the
+receipt journal during startup before it begins serving requests.
 
 ## Why this project exists
 
@@ -29,8 +30,9 @@ deletion intent across that boundary.
 - Legal holds and step-up checks for destructive operations
 - Hash-chained audit events
 - Signed deletion receipts with keyed subject references
+- Idempotent receipt creation for safe finalization retries
 - Write blocking for scheduled and deleted subjects
-- Reconciliation of keys resurrected by a stale SQLite restore
+- Startup reconciliation of keys resurrected by a stale SQLite restore
 
 ## How the restore flow works
 

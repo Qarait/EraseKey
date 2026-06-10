@@ -14,6 +14,10 @@ from .utils import canonical_json, new_id, utc_now
 RECEIPT_VERSION = 1
 
 
+class ReceiptJournalError(RuntimeError):
+    """Raised when the external receipt journal cannot be trusted."""
+
+
 def _signing_key() -> bytes:
     key_path = Path(settings.receipt_signing_key_path)
     key_path.parent.mkdir(parents=True, exist_ok=True)
@@ -51,6 +55,28 @@ def append_deletion_receipt(
     finalized_at: str,
     audit_event_hash: str,
 ) -> dict[str, Any]:
+    existing_receipts = list(iter_receipts())
+    verification = verify_receipt_log(existing_receipts)
+    if not verification["ok"]:
+        raise ReceiptJournalError(
+            "Deletion receipt journal failed signature verification."
+        )
+
+    expected_subject_ref = subject_ref(subject_id)
+    for receipt in existing_receipts:
+        if receipt["request_id"] != request_id:
+            continue
+        if (
+            receipt["tenant_id"] != tenant_id
+            or receipt["dataset_id"] != dataset_id
+            or receipt["subject_ref"] != expected_subject_ref
+            or receipt["request_hash"] != request_hash
+        ):
+            raise ReceiptJournalError(
+                f"Deletion request {request_id} conflicts with an existing receipt."
+            )
+        return receipt
+
     payload = {
         "version": RECEIPT_VERSION,
         "receipt_id": new_id("receipt"),
@@ -58,7 +84,7 @@ def append_deletion_receipt(
         "finalized_at": finalized_at,
         "tenant_id": tenant_id,
         "dataset_id": dataset_id,
-        "subject_ref": subject_ref(subject_id),
+        "subject_ref": expected_subject_ref,
         "request_id": request_id,
         "request_hash": request_hash,
         "audit_event_hash": audit_event_hash,

@@ -42,16 +42,25 @@ application.
 ## Restore flow
 
 A stale database backup may still contain a wrapped key that existed before
-deletion. The append-only receipt journal is stored separately from the
-database backup. After a restore, reconciliation verifies the journal and
-reapplies any missing erasures before records are served.
+deletion. The append-oriented receipt journal is stored separately from the
+database backup. At startup, reconciliation verifies the journal and reapplies
+any missing erasures before records are served. An invalid journal prevents the
+application from starting.
+
+Receipt creation is idempotent by deletion request. EraseKey intentionally
+writes and flushes the receipt before the SQLite transaction commits. If that
+commit fails, the receipt remains authoritative and startup reconciliation
+finishes the erasure. This favors deletion continuity over availability; it is
+not a distributed transaction.
 
 ## Limitations
 
 - The local API is unauthenticated unless authentication is explicitly enabled.
 - The local key and receipt-signing secret are development conveniences.
-- SQLite updates and receipt appends are separate writes. A process failure
-  between them can leave the two stores inconsistent; a production design
-  should use an outbox or another transactional handoff.
+- The receipt journal and signing key must be deployed in a storage and
+  administrative domain that is independent from database backups. A different
+  path on the same disk is not sufficient.
+- Multiple application processes still need external serialization around
+  receipt appends.
 - The audit hash chain detects edits only while its head is independently
   trusted. A database administrator could otherwise rewrite the chain.

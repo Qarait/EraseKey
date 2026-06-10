@@ -98,8 +98,8 @@ EraseKey behavior is controlled by environment variables:
 1. Create a tenant, dataset, record, and deletion request.
 2. Finalize the deletion. EraseKey destroys the wrapped subject key and appends a signed receipt.
 3. Simulate a stale restore by putting the old wrapped key back into SQLite.
-4. Call `POST /admin/restore/reconcile`.
-5. EraseKey verifies the external receipt journal, matches the keyed subject reference, and destroys the restored key again.
+4. Restart EraseKey, or call `POST /admin/restore/reconcile` explicitly.
+5. EraseKey verifies the external receipt journal, matches the keyed subject reference, and destroys the restored key again before serving startup traffic.
 
 `GET /admin/deletion-receipts/verify` verifies every receipt signature.
 
@@ -114,6 +114,12 @@ protocol. A production design would keep receipts in immutable storage and use a
 managed signing key outside the database backup domain.
 
 Finalization updates SQLite and appends to the receipt file as two separate
-writes. A process crash between those operations can leave them inconsistent.
-A production design should use a durable outbox or another transactional
-handoff to the external receipt store.
+writes. The receipt is flushed first and is authoritative if the SQLite commit
+fails; receipt creation is idempotent and startup reconciliation completes the
+erasure before requests are served. This is still not a distributed
+transaction, and concurrent application processes require external
+serialization.
+
+The receipt journal and signing key must be stored outside the database
+backup's storage and administrative domain. Merely choosing another path on the
+same disk does not provide restore independence.
