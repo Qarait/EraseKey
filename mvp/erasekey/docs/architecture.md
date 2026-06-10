@@ -1,6 +1,6 @@
 # Architecture
 
-## MVP architecture
+## Architecture
 
 ```text
 Client / Privacy Ops
@@ -53,7 +53,7 @@ Deletion is often requested per person, not per entire dataset. If you encrypt e
 5. Records encrypted under those keys become unreadable.
 6. An evidence object is written back to the request and the audit log.
 
-## Why ciphertext remains in the MVP
+## Why ciphertext remains
 That is deliberate. The product is modeling backup and cold-storage reality: data copies may continue to exist physically, but once key material is gone, those copies are no longer usable.
 
 ## Deletion continuity after restore
@@ -83,7 +83,7 @@ Replace the demo key wrapper with a real control plane:
 - Warehouse tombstones for analytics pipelines
 - Signed evidence bundles for auditors
 
-## Important limitation
-The MVP demonstrates deletion continuity mechanics. The local API is
-unauthenticated, and the local receipt signing key is a teaching substitute for
-a separate managed signing service.
+## Limitations
+
+The local API is unauthenticated. The receipt signing key is stored on disk for
+the demo; a deployed system would use a managed key in a separate trust domain.

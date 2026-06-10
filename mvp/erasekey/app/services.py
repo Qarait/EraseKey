@@ -39,14 +39,11 @@ def _row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
 
 
 def _audit(conn: sqlite3.Connection, entity_type: str, entity_id: str, action: str, payload: dict[str, Any], actor: str = "system") -> str:
-    # 1. Fetch previous hash
-    # Use rowid to ensure stable ordering for the chain
     last_event = conn.execute(
         "SELECT event_hash FROM audit_events ORDER BY rowid DESC LIMIT 1"
     ).fetchone()
     prev_hash = last_event['event_hash'] if last_event and last_event['event_hash'] else "none"
 
-    # 2. Build event core for hashing (precise and honest)
     now = utils.utc_now()
     event_core = {
         "event_type": action,
@@ -58,7 +55,6 @@ def _audit(conn: sqlite3.Connection, entity_type: str, entity_id: str, action: s
         "payload": payload
     }
     
-    # 3. Compute hash: sha256("erasekey.audit.v1\n" + prev_hash + "\n" + canonical_json(event_core))
     core_json = utils.canonical_json(event_core)
     hash_input = f"erasekey.audit.v1\n{prev_hash}\n{core_json}"
     event_hash = utils.sha256_hex(hash_input)
@@ -78,22 +74,17 @@ def _audit(conn: sqlite3.Connection, entity_type: str, entity_id: str, action: s
             now,
             prev_hash,
             event_hash,
-            1, # chain_version
+            1,
         ),
     )
     return event_hash
 
 
 def _handle_policy_deny(conn: sqlite3.Connection, entity_id: str, decision: PolicyResponse, entity_type: str, actor_type: ActorType = ActorType.HUMAN):
-    """
-    Centralized policy denial handler.
-    Ensures that for deletion requests, legal holds are persisted as 'blocked' status
-    before raising the final 403.
-    """
+    """Record a denial and persist legal-hold blocks before returning 403."""
     blocked_reason = f"Policy Denied: {decision.reason_code}"
     actor_name = "system_worker" if actor_type == ActorType.SYSTEM_WORKER else "operator"
     
-    # Audit the denial
     _audit(conn, entity_type, entity_id, f'{entity_type}.denied', {
         'reason_code': decision.reason_code,
         'blocked_reason': blocked_reason,
@@ -110,7 +101,7 @@ def _handle_policy_deny(conn: sqlite3.Connection, entity_id: str, decision: Poli
             'blocked_reason': blocked_reason,
             'actor_type': actor_type
         }, actor=actor_name)
-        # Crucial: commit the state transition before raising exception
+        # The context manager would roll this update back after HTTPException.
         conn.commit()
     
     raise HTTPException(
@@ -266,7 +257,6 @@ def release_legal_hold(hold_id: str, step_up_verified: bool = False, actor_type:
             raise HTTPException(status_code=404, detail='Legal hold not found.')
         hold_item = _row_to_dict(row) or {}
 
-        # Policy Check
         context = PolicyContext(
             action="release_legal_hold",
             tenant_id=hold_item['tenant_id'],
@@ -487,7 +477,6 @@ def read_record(record_id: str) -> dict[str, Any]:
         
         key_item = _row_to_dict(key_row) or {}
         
-        # Determine status
         if key_item['key_state'] == KeyState.destroyed.value or not key_item['wrapped_key']:
             return {
                 'id': record['id'], 'tenant_id': record['tenant_id'], 'dataset_id': record['dataset_id'],
@@ -496,10 +485,7 @@ def read_record(record_id: str) -> dict[str, Any]:
                 'key_state': key_item['key_state'], 'erase_status': EraseStatus.cryptographically_erased.value,
             }
 
-        # Subject key is pending erasure, block it
         if key_item['key_state'] == KeyState.pending_erasure.value:
-            # Note: We do not check if pending_deletion_until > now here to finalize automatically. 
-            # Finalization is an explicit sweep. We just block access.
             return {
                 'id': record['id'], 'tenant_id': record['tenant_id'], 'dataset_id': record['dataset_id'],
                 'subject_id': record['subject_id'], 'record_type': record['record_type'],
@@ -617,7 +603,6 @@ def execute_deletion_request(request_id: str, step_up_verified: bool = False, ac
             if request_item['status'] not in {RequestStatus.blocked.value, RequestStatus.canceled.value}:
                 raise HTTPException(status_code=400, detail='Request is not in a state that can be executed.')
 
-        # Policy Check
         holds = _find_active_holds(
             conn, request_item['tenant_id'], request_item['dataset_id'], request_item['subject_id']
         )
@@ -641,7 +626,6 @@ def execute_deletion_request(request_id: str, step_up_verified: bool = False, ac
         if window == 0:
             return _finalize_deletion_internal(conn, request_item, now, actor_type=actor_type)
         
-        # Schedule it
         active_keys = conn.execute(
             """
             SELECT id FROM subject_keys
@@ -706,7 +690,6 @@ def execute_deletion_request(request_id: str, step_up_verified: bool = False, ac
 def _finalize_deletion_internal(conn: sqlite3.Connection, request_item: dict[str, Any], now: str, evidence_payload: dict[str, Any] = None, actor_type: ActorType = ActorType.HUMAN) -> dict[str, Any]:
     actor_name = "system_worker" if actor_type == ActorType.SYSTEM_WORKER else "operator"
     
-    # 1. Subject Keys -> destroyed
     rows = conn.execute(
         'SELECT * FROM subject_keys WHERE tenant_id = ? AND dataset_id = ? AND subject_id = ? AND key_state != ?',
         (request_item['tenant_id'], request_item['dataset_id'], request_item['subject_id'], KeyState.destroyed.value),
@@ -754,7 +737,6 @@ def _finalize_deletion_internal(conn: sqlite3.Connection, request_item: dict[str
         'request_hash': request_item['request_hash'],
     }
 
-    # Add extra payload if provided (Worker observations)
     if evidence_payload:
         evidence.update(evidence_payload)
 
@@ -812,11 +794,9 @@ def finalize_deletion_request(
         if request_item['status'] != RequestStatus.scheduled.value:
              raise HTTPException(status_code=400, detail='Request is not scheduled.')
 
-        # Policy Check
         holds = _find_active_holds(
             conn, request_item['tenant_id'], request_item['dataset_id'], request_item['subject_id']
         )
-        # Fetch dataset for retention check
         ds_row = conn.execute("SELECT retention_days, created_at FROM datasets WHERE id = ?", (request_item['dataset_id'],)).fetchone()
         retention_expired = True
         if ds_row and ds_row['retention_days']:
@@ -870,7 +850,6 @@ def cancel_deletion_request(request_id: str, step_up_verified: bool = False, act
         if request_item['status'] != RequestStatus.scheduled.value:
             raise HTTPException(status_code=400, detail='Only scheduled requests can be canceled.')
 
-        # Policy Check
         context = PolicyContext(
             action="cancel",
             tenant_id=request_item['tenant_id'],
@@ -885,7 +864,6 @@ def cancel_deletion_request(request_id: str, step_up_verified: bool = False, act
 
         now = utils.utc_now()
         
-        # Revert keys
         conn.execute(
             """
             UPDATE subject_keys
@@ -949,13 +927,9 @@ def get_audit_head() -> str:
 
 
 def verify_audit_chain() -> dict[str, Any]:
-    """
-    Cryptographically verifies the entire audit chain.
-    Returns a result dict with success status and any found error.
-    """
+    """Verify every link and event hash in the audit chain."""
     verified_count = 0
     with get_conn() as conn:
-        # We order by rowid to ensure stable insertion order verification
         rows = conn.execute("SELECT * FROM audit_events ORDER BY rowid ASC").fetchall()
         
         expected_prev_hash = "none"
@@ -964,7 +938,6 @@ def verify_audit_chain() -> dict[str, Any]:
         for row in rows:
             event = _row_to_dict(row) or {}
             
-            # 1. Verify prev_hash link
             if event['prev_hash'] != expected_prev_hash:
                 return {
                     "ok": False,
@@ -975,7 +948,6 @@ def verify_audit_chain() -> dict[str, Any]:
                     "head_hash": head_hash
                 }
             
-            # 2. Recompute current hash
             payload = json.loads(event['payload_json'])
             event_core = {
                 "event_type": event['action'],
@@ -1035,15 +1007,10 @@ def list_audit_events(entity_type: Optional[str] = None, entity_id: Optional[str
 
 
 def finalize_due_deletions() -> list[str]:
-    """
-    Finds and finalizes all 'scheduled' deletion requests that have passed their waiting period.
-    Returns a list of request IDs that were successfully finalized.
-    """
+    """Finalize authorized deletion requests whose waiting period has elapsed."""
     due_request_ids = []
     with get_conn() as conn:
         now = utils.utc_now()
-        # Find scheduled requests where keys are ready for destruction
-        # Crucial for Mission 3: Only pick up requests with verified authorization
         rows = conn.execute(
             """
             SELECT dr.id
@@ -1059,14 +1026,9 @@ def finalize_due_deletions() -> list[str]:
     finalized_ids = []
     for request_id in due_request_ids:
         try:
-            # Re-use manual finalization path to ensure legal holds are checked
-            # and audit events are properly recorded.
-            # Worker operates as SYSTEM_WORKER and passes scheduled_and_due=True
             finalize_deletion_request(request_id, actor_type=ActorType.SYSTEM_WORKER, scheduled_and_due=True)
             finalized_ids.append(request_id)
         except HTTPException as exc:
-            # This is expected if a legal hold was added in the interim
-            # or if another process finalized it first.
             print(f"INFO: Automatic finalization skipped for {request_id}: {exc.detail}")
         except Exception as exc:
             print(f"ERROR: Failed to finalize {request_id} automatically: {exc}")

@@ -134,10 +134,8 @@ def init_db() -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     try:
-        # 1. Ensure core schema exists
         conn.executescript(SCHEMA)
-        
-        # 2. Add columns if missing (additive migration)
+
         cursor = conn.execute("PRAGMA table_info(audit_events)")
         existing_audit_cols = [row[1] for row in cursor.fetchall()]
         if 'prev_hash' not in existing_audit_cols:
@@ -154,7 +152,7 @@ def init_db() -> None:
         if 'step_up_authorized' not in existing_delreq_cols:
             conn.execute("ALTER TABLE deletion_requests ADD COLUMN step_up_authorized INTEGER DEFAULT 0")
             
-            # Strict Backfill: Only authorize requests that have a verifiable 'scheduled' audit event
+            # Scheduled requests are trusted only when the audit log records execution.
             conn.execute(
                 """
                 UPDATE deletion_requests 

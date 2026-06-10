@@ -33,7 +33,7 @@ When the `pending_deletion_until` timestamp expires (or if the window was set to
 The `/evidence` endpoint dynamically adjusts its attestation depending on the current phase of the deletion request:
 
 - **Scheduled Evidence**: Clearly states that access is blocked *by policy* and that the final cryptographic erasure is pending a timeline expiration. It **does not** claim the data is cryptographically erased yet.
-- **Finalized Evidence**: A robust attestation that the actual `wrapped_key` representing the subject was irrevocably destroyed.
+- **Finalized Evidence**: Records that the subject's `wrapped_key` was removed.
 
 ## 4. Local Mock vs AWS KMS
 
