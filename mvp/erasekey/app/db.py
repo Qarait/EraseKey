@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS deletion_requests (
     executed_at TEXT,
     canceled_at TEXT,
     finalized_at TEXT,
+    pending_deletion_until TEXT,
     evidence_json TEXT,
     request_hash TEXT NOT NULL,
     step_up_authorized INTEGER DEFAULT 0,
@@ -115,6 +116,7 @@ CREATE TABLE IF NOT EXISTS audit_events (
     entity_type TEXT NOT NULL,
     entity_id TEXT NOT NULL,
     action TEXT NOT NULL,
+    actor TEXT NOT NULL DEFAULT 'system',
     payload_json TEXT NOT NULL,
     created_at TEXT NOT NULL,
     prev_hash TEXT,
@@ -144,6 +146,8 @@ def init_db() -> None:
             conn.execute("ALTER TABLE audit_events ADD COLUMN event_hash TEXT")
         if 'chain_version' not in existing_audit_cols:
             conn.execute("ALTER TABLE audit_events ADD COLUMN chain_version INTEGER DEFAULT 1")
+        if 'actor' not in existing_audit_cols:
+            conn.execute("ALTER TABLE audit_events ADD COLUMN actor TEXT NOT NULL DEFAULT 'system'")
             
         cursor = conn.execute("PRAGMA table_info(deletion_requests)")
         existing_delreq_cols = [row[1] for row in cursor.fetchall()]
@@ -159,6 +163,8 @@ def init_db() -> None:
                   AND id IN (SELECT entity_id FROM audit_events WHERE action = 'deletion_request.scheduled')
                 """
             )
+        if 'pending_deletion_until' not in existing_delreq_cols:
+            conn.execute("ALTER TABLE deletion_requests ADD COLUMN pending_deletion_until TEXT")
             
         conn.commit()
     finally:

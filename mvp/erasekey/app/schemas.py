@@ -172,3 +172,16 @@ class SecurityStatusOut(BaseModel):
     is_mock_mode: bool
     operator_public_key_id: str
 
+
+class ReceiptVerificationOut(BaseModel):
+    ok: bool
+    receipt_count: int
+    invalid_receipt_ids: list[str]
+
+
+class RestoreReconciliationOut(BaseModel):
+    ok: bool
+    verified_receipts: int
+    matched_receipt_ids: list[str]
+    re_erased_key_ids: list[str]
+

@@ -20,6 +20,11 @@ Client / Privacy Ops
         +--> Envelope crypto
                - demo root key provider
                - wrapped per-subject data keys
+
+        +--> External receipt journal
+               - keyed subject references
+               - signed deletion receipts
+               - stale-restore reconciliation
 ```
 
 ## Key hierarchy
@@ -51,6 +56,23 @@ Deletion is often requested per person, not per entire dataset. If you encrypt e
 ## Why ciphertext remains in the MVP
 That is deliberate. The product is modeling backup and cold-storage reality: data copies may continue to exist physically, but once key material is gone, those copies are no longer usable.
 
+## Deletion continuity after restore
+
+SQLite is not the source of truth for completed erasures. Finalization also
+writes a signed receipt to a separate append-only journal. The receipt contains
+a keyed subject reference rather than the raw subject identifier.
+
+After restoring stale application state, the restore guard:
+
+1. verifies the journal signatures;
+2. scans local subject keys in the receipted tenant and dataset;
+3. derives keyed references for local subjects;
+4. destroys any resurrected wrapped key that matches a receipt;
+5. adds a `restore.re_erased` event to the audit chain.
+
+The receipt journal and its signing key must live outside the database backup
+domain for this property to hold.
+
 ## Production evolution
 
 Replace the demo key wrapper with a real control plane:
@@ -59,8 +81,9 @@ Replace the demo key wrapper with a real control plane:
 - S3 object connectors
 - Postgres / RDS connector for live-system deletes
 - Warehouse tombstones for analytics pipelines
-- Restore detection to re-apply deletion after backup restore
 - Signed evidence bundles for auditors
 
 ## Important limitation
-The MVP demonstrates cryptographic erasure mechanics. It does not claim to solve every real-world deletion problem by itself.
+The MVP demonstrates deletion continuity mechanics. The local API is
+unauthenticated, and the local receipt signing key is a teaching substitute for
+a separate managed signing service.

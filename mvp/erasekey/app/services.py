@@ -23,6 +23,13 @@ from .schemas import (
 )
 from . import utils
 from .policy_engine import ActorType, PolicyContext, PolicyDecision, PolicyResponse, engine
+from .receipts import (
+    append_deletion_receipt,
+    has_deletion_receipt,
+    subject_ref,
+    valid_receipts,
+    verify_receipt_log,
+)
 
 
 def _row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -58,14 +65,15 @@ def _audit(conn: sqlite3.Connection, entity_type: str, entity_id: str, action: s
 
     conn.execute(
         """
-        INSERT INTO audit_events (id, entity_type, entity_id, action, payload_json, created_at, prev_hash, event_hash, chain_version)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO audit_events (id, entity_type, entity_id, action, actor, payload_json, created_at, prev_hash, event_hash, chain_version)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             utils.new_id('audit'),
             entity_type,
             entity_id,
             action,
+            actor,
             utils.canonical_json(payload),
             now,
             prev_hash,
@@ -382,6 +390,33 @@ def create_record(payload: RecordCreate) -> dict[str, Any]:
         if dataset['tenant_id'] != payload.tenant_id:
             raise HTTPException(status_code=400, detail='Dataset does not belong to tenant.')
 
+        deletion_state = conn.execute(
+            """
+            SELECT status
+            FROM deletion_requests
+            WHERE tenant_id = ? AND dataset_id = ? AND subject_id = ?
+              AND status IN ('scheduled', 'finalized')
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (payload.tenant_id, payload.dataset_id, payload.subject_id),
+        ).fetchone()
+        receipt_status = verify_receipt_log()
+        if not receipt_status['ok']:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail='Deletion receipt journal is invalid; writes are disabled.',
+            )
+        if deletion_state or has_deletion_receipt(
+            payload.tenant_id,
+            payload.dataset_id,
+            payload.subject_id,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail='Subject is protected by a deletion tombstone; new writes are blocked.',
+            )
+
         subject_key, data_key = _ensure_subject_key(conn, tenant_dict, payload.dataset_id, payload.subject_id)
         record_id = utils.new_id('rec')
         aad = {
@@ -509,6 +544,23 @@ def create_deletion_request(payload: DeletionRequestCreate) -> dict[str, Any]:
         if dataset['tenant_id'] != payload.tenant_id:
             raise HTTPException(status_code=400, detail='Dataset does not belong to tenant.')
 
+        existing = conn.execute(
+            """
+            SELECT id, status
+            FROM deletion_requests
+            WHERE tenant_id = ? AND dataset_id = ? AND subject_id = ?
+              AND status IN ('pending', 'blocked', 'scheduled')
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (payload.tenant_id, payload.dataset_id, payload.subject_id),
+        ).fetchone()
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f'An active deletion request already exists: {existing["id"]}.',
+            )
+
         holds = _find_active_holds(conn, payload.tenant_id, payload.dataset_id, payload.subject_id)
         blocked_reason = None
         status_value = RequestStatus.pending.value
@@ -530,13 +582,13 @@ def create_deletion_request(payload: DeletionRequestCreate) -> dict[str, Any]:
         }
         conn.execute(
             """
-            INSERT INTO deletion_requests (id, tenant_id, dataset_id, subject_id, requested_by, reason, status, blocked_reason, created_at, executed_at, canceled_at, finalized_at, evidence_json, request_hash, step_up_authorized)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO deletion_requests (id, tenant_id, dataset_id, subject_id, requested_by, reason, status, blocked_reason, created_at, executed_at, canceled_at, finalized_at, pending_deletion_until, evidence_json, request_hash, step_up_authorized)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 record['id'], record['tenant_id'], record['dataset_id'], record['subject_id'],
                 record['requested_by'], record['reason'], record['status'], record['blocked_reason'],
-                record['created_at'], None, None, None, None, record['request_hash'], 0
+                record['created_at'], None, None, None, None, None, record['request_hash'], 0
             ),
         )
         _audit(conn, 'deletion_request', record['id'], 'deletion_request.created', record)
@@ -587,7 +639,7 @@ def execute_deletion_request(request_id: str, step_up_verified: bool = False, ac
         now = utils.utc_now()
 
         if window == 0:
-            return _finalize_deletion_internal(conn, request_item, now)
+            return _finalize_deletion_internal(conn, request_item, now, actor_type=actor_type)
         
         # Schedule it
         active_keys = conn.execute(
@@ -625,15 +677,30 @@ def execute_deletion_request(request_id: str, step_up_verified: bool = False, ac
         }
 
         conn.execute(
-            'UPDATE deletion_requests SET status = ?, blocked_reason = NULL, executed_at = ?, evidence_json = ?, step_up_authorized = ? WHERE id = ?',
-            (RequestStatus.scheduled.value, now, utils.canonical_json(evidence), 1 if step_up_verified else 0, request_id),
+            'UPDATE deletion_requests SET status = ?, blocked_reason = NULL, executed_at = ?, pending_deletion_until = ?, evidence_json = ?, step_up_authorized = ? WHERE id = ?',
+            (
+                RequestStatus.scheduled.value,
+                now,
+                pending_until_str,
+                utils.canonical_json(evidence),
+                1 if step_up_verified else 0,
+                request_id,
+            ),
         )
         request_item['status'] = RequestStatus.scheduled.value
         request_item['blocked_reason'] = None
         request_item['executed_at'] = now
+        request_item['pending_deletion_until'] = pending_until_str
         request_item['evidence_json'] = utils.canonical_json(evidence) # to keep memory object fresh
         
-        _audit(conn, 'deletion_request', request_id, 'deletion_request.scheduled', evidence)
+        _audit(
+            conn,
+            'deletion_request',
+            request_id,
+            'deletion_request.scheduled',
+            evidence,
+            actor="system_worker" if actor_type == ActorType.SYSTEM_WORKER else "operator",
+        )
         return request_item
 
 def _finalize_deletion_internal(conn: sqlite3.Connection, request_item: dict[str, Any], now: str, evidence_payload: dict[str, Any] = None, actor_type: ActorType = ActorType.HUMAN) -> dict[str, Any]:
@@ -692,8 +759,31 @@ def _finalize_deletion_internal(conn: sqlite3.Connection, request_item: dict[str
         evidence.update(evidence_payload)
 
     status_field = RequestStatus.finalized.value
+    event_hash = _audit(
+        conn,
+        'deletion_request',
+        request_item['id'],
+        'deletion_request.finalized',
+        evidence,
+        actor=actor_name,
+    )
+    receipt = append_deletion_receipt(
+        tenant_id=request_item['tenant_id'],
+        dataset_id=request_item['dataset_id'],
+        subject_id=request_item['subject_id'],
+        request_id=request_item['id'],
+        request_hash=request_item['request_hash'],
+        finalized_at=now,
+        audit_event_hash=event_hash,
+    )
+    evidence['deletion_receipt'] = {
+        'receipt_id': receipt['receipt_id'],
+        'subject_ref': receipt['subject_ref'],
+        'signature': receipt['signature'],
+    }
+
     conn.execute(
-        'UPDATE deletion_requests SET status = ?, blocked_reason = NULL, executed_at = COALESCE(executed_at, ?), finalized_at = ?, evidence_json = ? WHERE id = ?',
+        'UPDATE deletion_requests SET status = ?, blocked_reason = NULL, executed_at = COALESCE(executed_at, ?), finalized_at = ?, pending_deletion_until = NULL, evidence_json = ? WHERE id = ?',
         (status_field, now, now, utils.canonical_json(evidence), request_item['id']),
     )
     request_item['status'] = status_field
@@ -703,7 +793,6 @@ def _finalize_deletion_internal(conn: sqlite3.Connection, request_item: dict[str
     request_item['finalized_at'] = now
     request_item['evidence_json'] = utils.canonical_json(evidence)
 
-    _audit(conn, 'deletion_request', request_item['id'], 'deletion_request.finalized', evidence, actor=actor_name)
     return request_item
 
 def finalize_deletion_request(
@@ -807,13 +896,20 @@ def cancel_deletion_request(request_id: str, step_up_verified: bool = False, act
         )
 
         conn.execute(
-            'UPDATE deletion_requests SET status = ?, canceled_at = ? WHERE id = ?',
+            'UPDATE deletion_requests SET status = ?, canceled_at = ?, pending_deletion_until = NULL WHERE id = ?',
             (RequestStatus.canceled.value, now, request_id),
         )
         request_item['status'] = RequestStatus.canceled.value
         request_item['canceled_at'] = now
         
-        _audit(conn, 'deletion_request', request_id, 'deletion_request.canceled', {'canceled_at': now})
+        _audit(
+            conn,
+            'deletion_request',
+            request_id,
+            'deletion_request.canceled',
+            {'canceled_at': now},
+            actor="system_worker" if actor_type == ActorType.SYSTEM_WORKER else "operator",
+        )
         return request_item
 
 
@@ -884,7 +980,7 @@ def verify_audit_chain() -> dict[str, Any]:
             event_core = {
                 "event_type": event['action'],
                 "timestamp": event['created_at'],
-                "actor": "system",
+                "actor": event['actor'],
                 "tenant_id": payload.get("tenant_id", "none"),
                 "entity_type": event['entity_type'],
                 "entity_id": event['entity_id'],
@@ -950,15 +1046,11 @@ def finalize_due_deletions() -> list[str]:
         # Crucial for Mission 3: Only pick up requests with verified authorization
         rows = conn.execute(
             """
-            SELECT DISTINCT dr.id
+            SELECT dr.id
             FROM deletion_requests dr
-            JOIN subject_keys sk ON dr.tenant_id = sk.tenant_id
-               AND dr.dataset_id = sk.dataset_id
-               AND dr.subject_id = sk.subject_id
             WHERE dr.status = 'scheduled'
               AND dr.step_up_authorized = 1
-              AND sk.key_state = 'pending_erasure'
-              AND sk.pending_deletion_until <= ?
+              AND dr.pending_deletion_until <= ?
             """,
             (now,),
         ).fetchall()
@@ -980,4 +1072,92 @@ def finalize_due_deletions() -> list[str]:
             print(f"ERROR: Failed to finalize {request_id} automatically: {exc}")
 
     return finalized_ids
+
+
+def reconcile_deletion_receipts() -> dict[str, Any]:
+    """
+    Re-applies externally journaled deletions after a stale database restore.
+
+    The receipt journal stores only a keyed subject reference, so reconciliation
+    scans local subject keys and compares references without persisting raw
+    subject identifiers outside the database.
+    """
+    verification = verify_receipt_log()
+    if not verification['ok']:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail='Deletion receipt journal failed signature verification.',
+        )
+
+    receipts = valid_receipts()
+    re_erased_key_ids: list[str] = []
+    matched_receipt_ids: list[str] = []
+    now = utils.utc_now()
+
+    with get_conn() as conn:
+        for receipt in receipts:
+            receipt_key_ids: list[str] = []
+            key_rows = conn.execute(
+                """
+                SELECT *
+                FROM subject_keys
+                WHERE tenant_id = ? AND dataset_id = ?
+                  AND (wrapped_key IS NOT NULL OR key_state != 'destroyed')
+                """,
+                (receipt['tenant_id'], receipt['dataset_id']),
+            ).fetchall()
+
+            matched = False
+            for row in key_rows:
+                key_item = _row_to_dict(row) or {}
+                if subject_ref(key_item['subject_id']) != receipt['subject_ref']:
+                    continue
+                conn.execute(
+                    """
+                    UPDATE subject_keys
+                    SET wrapped_key = NULL,
+                        wrapped_key_nonce = NULL,
+                        key_state = ?,
+                        pending_deletion_until = NULL,
+                        destroyed_at = ?
+                    WHERE id = ?
+                    """,
+                    (KeyState.destroyed.value, now, key_item['id']),
+                )
+                re_erased_key_ids.append(key_item['id'])
+                receipt_key_ids.append(key_item['id'])
+                matched = True
+
+            conn.execute(
+                """
+                UPDATE deletion_requests
+                SET status = ?, blocked_reason = NULL, finalized_at = ?,
+                    pending_deletion_until = NULL
+                WHERE request_hash = ?
+                """,
+                (RequestStatus.finalized.value, receipt['finalized_at'], receipt['request_hash']),
+            )
+
+            if matched:
+                matched_receipt_ids.append(receipt['receipt_id'])
+                _audit(
+                    conn,
+                    'deletion_receipt',
+                    receipt['receipt_id'],
+                    'restore.re_erased',
+                    {
+                        'tenant_id': receipt['tenant_id'],
+                        'dataset_id': receipt['dataset_id'],
+                        'subject_ref': receipt['subject_ref'],
+                        're_erased_key_ids': receipt_key_ids,
+                    },
+                    actor='restore_guard',
+                )
+
+    return {
+        'ok': True,
+        'verified_receipts': verification['receipt_count'],
+        'matched_receipt_ids': matched_receipt_ids,
+        're_erased_key_ids': re_erased_key_ids,
+    }
 

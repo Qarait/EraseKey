@@ -50,3 +50,10 @@ Return machine-readable evidence after execution.
 
 ## GET /audit-events
 List recent audit events. Supports `entity_type` and `entity_id` filters.
+
+## GET /admin/deletion-receipts/verify
+Verify signatures for the external deletion receipt journal.
+
+## POST /admin/restore/reconcile
+Compare valid external receipts with local subject keys and destroy key material
+that was resurrected by a stale database restore.

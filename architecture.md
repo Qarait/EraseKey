@@ -20,6 +20,11 @@ Client / Privacy Ops
         +--> Envelope crypto
                - demo root key provider
                - wrapped per-subject data keys
+
+        +--> External receipt journal
+               - keyed subject references
+               - signed deletion receipts
+               - stale-restore reconciliation
 ```
 
 ## Key hierarchy
@@ -51,6 +56,16 @@ Deletion is often requested per person, not per entire dataset. If you encrypt e
 ## Why ciphertext remains in the MVP
 That is deliberate. The product is modeling backup and cold-storage reality: data copies may continue to exist physically, but once key material is gone, those copies are no longer usable.
 
+## Deletion continuity after restore
+
+Finalized erasures are also recorded in a signed journal outside SQLite. When a
+stale database snapshot resurrects wrapped key material, the restore guard
+matches keyed subject references and destroys the restored keys again.
+
+This is the project's primary distinction from general privacy-request
+automation: it experiments with preserving deletion intent across rollback and
+restore boundaries.
+
 ## Production evolution
 
 Replace the demo key wrapper with a real control plane:
@@ -59,7 +74,6 @@ Replace the demo key wrapper with a real control plane:
 - S3 object connectors
 - Postgres / RDS connector for live-system deletes
 - Warehouse tombstones for analytics pipelines
-- Restore detection to re-apply deletion after backup restore
 - Signed evidence bundles for auditors
 
 ## Important limitation

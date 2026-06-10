@@ -1,6 +1,7 @@
-# EraseKey
+# EraseKey Restore Lab
 
-EraseKey is a Deletion Assurance MVP inspired by the cryptographic-erasure thesis in Article 3.
+EraseKey is a restore-safe cryptographic-erasure experiment. It is deliberately
+not a privacy request portal, compliance dashboard, or connector marketplace.
 
 Instead of pretending every copy of user data can be physically deleted immediately, this service encrypts subject-scoped records with envelope encryption and then makes them unreadable by destroying the wrapped subject keys. The ciphertext remains in place (mirroring backups/cold storage), but is rendered cryptographically unrecoverable.
 
@@ -15,6 +16,9 @@ Instead of pretending every copy of user data can be physically deleted immediat
     - **Finalized**: Wrapped keys are destroyed; erasure is complete.
 - **Legal Holds**: Holds block both the transition to "Scheduled" and the final "Finalized" step.
 - **Audit Trail**: Every action (ingestion, hold, schedule, destroy) produces a signed-hash audit event.
+- **Deletion Receipts**: Finalization writes a signed receipt to an append-only journal outside SQLite.
+- **Restore Guard**: A stale SQLite restore can be scanned against the receipt journal and re-erased.
+- **Resurrection Prevention**: Scheduled or receipted subjects cannot receive new records.
 
 ## Tech Stack
 
@@ -68,6 +72,8 @@ EraseKey behavior is controlled by environment variables:
 | `ERASEKEY_KMS_MODE` | `mock` | `mock` for local development, `aws` for production. |
 | `ERASEKEY_AWS_KMS_KEY_ID` | None | The ARN or ID of the CMK in AWS KMS. |
 | `ERASEKEY_DELETION_WINDOW_DAYS` | `7` | Mandatory waiting period before keys can be destroyed. |
+| `ERASEKEY_RECEIPT_LOG_PATH` | `data/deletion_receipts.jsonl` | Receipt journal stored separately from application state. |
+| `ERASEKEY_RECEIPT_SIGNING_KEY_PATH` | `data/.receipt_signing_key` | Local HMAC key used to sign and identify receipts in demo mode. |
 
 ## Deletion Semantics
 
@@ -79,3 +85,24 @@ EraseKey behavior is controlled by environment variables:
    Destroys the wrapped subject keys. This is irreversible.
 4. **Automatic Finalization**:
    Run `python scripts/finalize_worker.py` to automatically finalize all requests whose waiting period has expired.
+
+## Restore-Safety Demo
+
+1. Create a tenant, dataset, record, and deletion request.
+2. Finalize the deletion. EraseKey destroys the wrapped subject key and appends a signed receipt.
+3. Simulate a stale restore by putting the old wrapped key back into SQLite.
+4. Call `POST /admin/restore/reconcile`.
+5. EraseKey verifies the external receipt journal, matches the keyed subject reference, and destroys the restored key again.
+
+`GET /admin/deletion-receipts/verify` verifies every receipt signature.
+
+The automated test `test_restore_reconciliation_re_erases_resurrected_key`
+executes this scenario end to end.
+
+## Security Boundary
+
+This repository is a local lab. Its API has no production authentication and
+must not be exposed to an untrusted network. The local HMAC journal demonstrates
+the protocol, but a real deployment should place receipts and signing keys in a
+separate trust domain such as an immutable object store and managed signing
+service.

@@ -11,9 +11,12 @@ import json
 BASE_TEMP = tempfile.mkdtemp(prefix='erasekey_test_')
 os.environ['ERASEKEY_DB_PATH'] = str(Path(BASE_TEMP) / 'test.db')
 os.environ['ERASEKEY_ROOT_KEY_PATH'] = str(Path(BASE_TEMP) / '.root_kek')
+os.environ['ERASEKEY_RECEIPT_LOG_PATH'] = str(Path(BASE_TEMP) / 'deletion_receipts.jsonl')
+os.environ['ERASEKEY_RECEIPT_SIGNING_KEY_PATH'] = str(Path(BASE_TEMP) / '.receipt_signing_key')
 os.environ['ERASEKEY_KMS_MODE'] = 'mock'
 os.environ['ERASEKEY_DELETION_WINDOW_DAYS'] = '7'
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.db import init_db, get_conn
@@ -42,6 +45,10 @@ class EraseKeyFlowTests(unittest.TestCase):
         db_path = Path(os.environ['ERASEKEY_DB_PATH'])
         if db_path.exists():
             db_path.unlink()
+        for env_name in ('ERASEKEY_RECEIPT_LOG_PATH', 'ERASEKEY_RECEIPT_SIGNING_KEY_PATH'):
+            path = Path(os.environ[env_name])
+            if path.exists():
+                path.unlink()
         init_db()
         self.client = TestClient(app)
 
@@ -275,7 +282,7 @@ class EraseKeyFlowTests(unittest.TestCase):
         self.assertEqual(erased.json()['erase_status'], 'cryptographically_erased')
         from app.services import finalize_due_deletions
         finalized = finalize_due_deletions()
-        self.assertEqual(len(finalized), 1)
+        self.assertEqual(len(finalized), 0)
 
     def test_worker_respects_new_legal_hold_and_fails_closed(self) -> None:
         from app.services import finalize_due_deletions
@@ -313,7 +320,8 @@ class EraseKeyFlowTests(unittest.TestCase):
         tenant = self.client.post('/tenants', json={'name': 'LeakTest'}).json()
         dataset = self.client.post('/datasets', json={'tenant_id': tenant['id'], 'name': 'ds'}).json()
         del_req = self.client.post('/deletion-requests', json={
-            'tenant_id': tenant['id'], 'dataset_id': dataset['id'], 'subject_id': 's', 'requested_by': 'b', 'reason': 'r'
+            'tenant_id': tenant['id'], 'dataset_id': dataset['id'], 'subject_id': 's',
+            'requested_by': 'bot', 'reason': 'privacy request'
         }).json()
         
         resp = self.client.post(f"/deletion-requests/{del_req['id']}/execute")
@@ -348,7 +356,8 @@ class EraseKeyFlowTests(unittest.TestCase):
         tenant = self.client.post('/tenants', json={'name': 'ChainTest'}).json()
         dataset = self.client.post('/datasets', json={'tenant_id': tenant['id'], 'name': 'ds'}).json()
         del_req = self.client.post('/deletion-requests', json={
-            'tenant_id': tenant['id'], 'dataset_id': dataset['id'], 'subject_id': 's', 'requested_by': 'b', 'reason': 'r'
+            'tenant_id': tenant['id'], 'dataset_id': dataset['id'], 'subject_id': 's',
+            'requested_by': 'bot', 'reason': 'privacy request'
         }).json()
         
         # 1. Manually executed without step-up authorized column set (mocked as if legacy or denial bypass)
@@ -374,9 +383,9 @@ class EraseKeyFlowTests(unittest.TestCase):
         res = finalize_deletion_request(del_req['id'], actor_type=ActorType.SYSTEM_WORKER, scheduled_and_due=True)
         self.assertEqual(res['status'], 'finalized')
         
-        # Status should still be 'scheduled'
+        # The worker completed the authorized finalization.
         updated_req = self.client.get(f"/deletion-requests/{del_req['id']}").json()
-        self.assertEqual(updated_req['status'], 'scheduled')
+        self.assertEqual(updated_req['status'], 'finalized')
 
     def test_destructive_action_denied_without_step_up(self) -> None:
         tenant = self.client.post('/tenants', json={'name': 'BadActor'}).json()
@@ -390,6 +399,167 @@ class EraseKeyFlowTests(unittest.TestCase):
         resp = self.client.post(f"/deletion-requests/{del_req['id']}/execute")
         self.assertEqual(resp.status_code, 403)
         self.assertIn("STEP_UP_REQUIRED", resp.json()['detail'])
+
+    def test_scheduled_deletion_blocks_new_writes_and_overlap(self) -> None:
+        from app.config import settings
+        object.__setattr__(settings, 'deletion_window_days', 7)
+
+        tenant = self.client.post('/tenants', json={'name': 'WriteGuard'}).json()
+        dataset = self.client.post(
+            '/datasets',
+            json={'tenant_id': tenant['id'], 'name': 'messages'},
+        ).json()
+        subject = 'subject-write-guard'
+        self.client.post('/records', json={
+            'tenant_id': tenant['id'],
+            'dataset_id': dataset['id'],
+            'subject_id': subject,
+            'record_type': 'message',
+            'payload': {'body': 'before deletion'},
+        })
+        request = self.client.post('/deletion-requests', json={
+            'tenant_id': tenant['id'],
+            'dataset_id': dataset['id'],
+            'subject_id': subject,
+            'requested_by': 'privacy-team',
+            'reason': 'subject requested deletion',
+        }).json()
+
+        duplicate = self.client.post('/deletion-requests', json={
+            'tenant_id': tenant['id'],
+            'dataset_id': dataset['id'],
+            'subject_id': subject,
+            'requested_by': 'privacy-team',
+            'reason': 'duplicate deletion',
+        })
+        self.assertEqual(duplicate.status_code, 409)
+
+        step_up = self._get_step_up_body('execute', request['id'])
+        self.client.post(f"/deletion-requests/{request['id']}/execute", json=step_up)
+
+        write = self.client.post('/records', json={
+            'tenant_id': tenant['id'],
+            'dataset_id': dataset['id'],
+            'subject_id': subject,
+            'record_type': 'message',
+            'payload': {'body': 'resurrected data'},
+        })
+        self.assertEqual(write.status_code, 409)
+        self.assertIn('deletion tombstone', write.json()['detail'])
+
+    def test_worker_finalizes_subject_without_existing_keys(self) -> None:
+        from app.config import settings
+        from app.services import finalize_due_deletions
+
+        object.__setattr__(settings, 'deletion_window_days', 7)
+        with mock.patch('app.services.utils.utc_now_dt') as mock_now_dt:
+            mock_now_dt.return_value = datetime(2026, 4, 15, tzinfo=timezone.utc)
+            tenant = self.client.post('/tenants', json={'name': 'EmptySubject'}).json()
+            dataset = self.client.post(
+                '/datasets',
+                json={'tenant_id': tenant['id'], 'name': 'empty-dataset'},
+            ).json()
+            request = self.client.post('/deletion-requests', json={
+                'tenant_id': tenant['id'],
+                'dataset_id': dataset['id'],
+                'subject_id': 'no-records',
+                'requested_by': 'privacy-team',
+                'reason': 'delete even if no records exist',
+            }).json()
+            step_up = self._get_step_up_body('execute', request['id'])
+            scheduled = self.client.post(
+                f"/deletion-requests/{request['id']}/execute",
+                json=step_up,
+            )
+            self.assertEqual(scheduled.json()['status'], 'scheduled')
+
+            mock_now_dt.return_value = datetime(2026, 4, 23, tzinfo=timezone.utc)
+            self.assertEqual(finalize_due_deletions(), [request['id']])
+            completed = self.client.get(f"/deletion-requests/{request['id']}").json()
+            self.assertEqual(completed['status'], 'finalized')
+
+    def test_restore_reconciliation_re_erases_resurrected_key(self) -> None:
+        from app.config import settings
+
+        object.__setattr__(settings, 'deletion_window_days', 0)
+        tenant = self.client.post('/tenants', json={'name': 'RestoreGuard'}).json()
+        dataset = self.client.post(
+            '/datasets',
+            json={'tenant_id': tenant['id'], 'name': 'restore-demo'},
+        ).json()
+        subject = 'restore-subject'
+        record = self.client.post('/records', json={
+            'tenant_id': tenant['id'],
+            'dataset_id': dataset['id'],
+            'subject_id': subject,
+            'record_type': 'profile',
+            'payload': {'email': 'restored@example.com'},
+        }).json()
+
+        with get_conn() as conn:
+            key = conn.execute(
+                'SELECT id, wrapped_key FROM subject_keys WHERE subject_id = ?',
+                (subject,),
+            ).fetchone()
+            key_id = key['id']
+            stale_wrapped_key = key['wrapped_key']
+
+        request = self.client.post('/deletion-requests', json={
+            'tenant_id': tenant['id'],
+            'dataset_id': dataset['id'],
+            'subject_id': subject,
+            'requested_by': 'privacy-team',
+            'reason': 'restore safety demonstration',
+        }).json()
+        step_up = self._get_step_up_body('execute', request['id'])
+        finalized = self.client.post(
+            f"/deletion-requests/{request['id']}/execute",
+            json=step_up,
+        )
+        self.assertEqual(finalized.json()['status'], 'finalized')
+
+        receipt_check = self.client.get('/admin/deletion-receipts/verify')
+        self.assertTrue(receipt_check.json()['ok'])
+        self.assertEqual(receipt_check.json()['receipt_count'], 1)
+
+        # Simulate restoring an old database snapshot containing the wrapped key.
+        with get_conn() as conn:
+            conn.execute(
+                """
+                UPDATE subject_keys
+                SET wrapped_key = ?, key_state = 'active', destroyed_at = NULL
+                WHERE id = ?
+                """,
+                (stale_wrapped_key, key_id),
+            )
+            conn.execute(
+                """
+                UPDATE deletion_requests
+                SET status = 'pending', finalized_at = NULL
+                WHERE id = ?
+                """,
+                (request['id'],),
+            )
+
+        resurrected = self.client.get(f"/records/{record['id']}")
+        self.assertEqual(resurrected.json()['erase_status'], 'readable')
+
+        blocked_write = self.client.post('/records', json={
+            'tenant_id': tenant['id'],
+            'dataset_id': dataset['id'],
+            'subject_id': subject,
+            'record_type': 'profile',
+            'payload': {'email': 'new-copy@example.com'},
+        })
+        self.assertEqual(blocked_write.status_code, 409)
+
+        reconciled = self.client.post('/admin/restore/reconcile')
+        self.assertEqual(reconciled.status_code, 200)
+        self.assertIn(key_id, reconciled.json()['re_erased_key_ids'])
+
+        erased_again = self.client.get(f"/records/{record['id']}")
+        self.assertEqual(erased_again.json()['erase_status'], 'cryptographically_erased')
+        self.assertTrue(self.client.get('/admin/audit/verify').json()['ok'])
 
 if __name__ == '__main__':
     unittest.main()

@@ -4,27 +4,26 @@
 EraseKey
 
 ## Positioning
-Deletion Assurance for cloud SaaS teams.
+Restore-safe deletion continuity for security engineers.
 
 ## The problem
 Teams promise deletion, but modern cloud systems replicate data into snapshots, versioned object stores, analytics pipelines, and long-lived backups. A row delete in the primary database does not reliably erase those copies.
 
-## The product wedge
-Start with a narrow buyer and a narrow stack:
+## The project wedge
 
-- Buyer: B2B SaaS companies with privacy/compliance pressure
-- Stack: AWS-first
-- Initial systems: app database + S3-like object store + deletion evidence
+Most privacy products orchestrate requests and connectors. EraseKey explores a
+different failure mode: old snapshots can restore data and key material after a
+deletion appeared complete.
 
 ## Core promise
-When a valid deletion request arrives, EraseKey destroys the wrapped subject keys that protect the encrypted data. The ciphertext may remain in place, but it becomes unreadable. The system also records legal-hold checks and emits machine-readable evidence.
+When a deletion is finalized, EraseKey destroys wrapped subject keys and writes
+a signed receipt outside the application database. If stale state later
+resurrects those keys, the receipt blocks new writes and drives re-erasure.
 
-## Ideal first customer
-A startup or mid-market SaaS team that:
+## Intended audience
 
-- stores customer-generated content
-- needs deletion workflows that are more credible than soft delete
-- uses AWS and wants a path to stronger privacy controls without rebuilding everything at once
+Security and backend engineers learning about envelope encryption, irreversible
+state machines, stale restores, evidence, and recovery controls.
 
 ## MVP scope
 - Subject-scoped envelope encryption
@@ -34,13 +33,17 @@ A startup or mid-market SaaS team that:
 - Deletion request workflow
 - Cryptographic erasure execution
 - Audit events and evidence export
+- External signed deletion receipts
+- Stale-restore reconciliation
 
 ## Non-goals for MVP
-- Full privacy request intake portal
+- Full privacy request intake portal or compliance dashboard
 - Cross-cloud support
-- Automatic discovery of all copies across every system
+- Connector marketplaces or automatic discovery across every system
 - Machine unlearning
 - Immutable compliance archive design
 
-## Why the design is defensible
-The hard part is not a pretty dashboard. The hard part is making deletion behavior technically honest, operationally safe, and auditable.
+## Why this direction is distinct
+
+The interesting artifact is not the deletion endpoint. It is the continuity
+protocol that remembers an erasure outside the database being restored.
