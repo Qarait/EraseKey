@@ -26,6 +26,7 @@ from .policy_engine import ActorType, PolicyContext, PolicyDecision, PolicyRespo
 from .receipts import (
     append_deletion_receipt,
     has_deletion_receipt,
+    iter_receipts,
     subject_ref,
     valid_receipts,
     verify_receipt_log,
@@ -391,7 +392,8 @@ def create_record(payload: RecordCreate) -> dict[str, Any]:
             """,
             (payload.tenant_id, payload.dataset_id, payload.subject_id),
         ).fetchone()
-        receipt_status = verify_receipt_log()
+        receipts = list(iter_receipts())
+        receipt_status = verify_receipt_log(receipts)
         if not receipt_status['ok']:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -401,6 +403,7 @@ def create_record(payload: RecordCreate) -> dict[str, Any]:
             payload.tenant_id,
             payload.dataset_id,
             payload.subject_id,
+            receipts,
         ):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -1044,14 +1047,15 @@ def reconcile_deletion_receipts() -> dict[str, Any]:
     scans local subject keys and compares references without persisting raw
     subject identifiers outside the database.
     """
-    verification = verify_receipt_log()
+    receipts = list(iter_receipts())
+    verification = verify_receipt_log(receipts)
     if not verification['ok']:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail='Deletion receipt journal failed signature verification.',
         )
 
-    receipts = valid_receipts()
+    receipts = valid_receipts(receipts)
     re_erased_key_ids: list[str] = []
     matched_receipt_ids: list[str] = []
     now = utils.utc_now()
