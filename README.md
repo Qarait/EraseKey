@@ -1,13 +1,85 @@
 # EraseKey
 
-EraseKey is a small FastAPI project that explores cryptographic deletion across
-database restores.
+EraseKey is a small FastAPI project that explores a specific failure mode in
+cryptographic deletion: an old database snapshot can restore both encrypted data
+and the wrapped key needed to read it.
 
-Records are encrypted with per-subject data keys. Finalizing a deletion removes
-the wrapped key and writes a signed receipt outside the application database. If
-an old database snapshot later restores that key, the receipt can be used to
-find and destroy it again.
+The service encrypts records with per-subject data keys. Finalizing a deletion
+removes those wrapped keys and writes a signed receipt outside the application
+database. If stale database state later brings a key back, EraseKey can use the
+receipt to find and destroy it again.
 
-The implementation lives in [`mvp/erasekey`](mvp/erasekey). See its
-[README](mvp/erasekey/README.md) for setup, API details, and the restore
-simulation.
+## Why this project exists
+
+Deleting a row from a live database says little about backups, replicas, or
+exported copies. Envelope encryption offers a different control: keep the
+ciphertext, but remove the key that makes it readable.
+
+That still leaves a restore problem. If the wrapped key and the deletion record
+live in the same database, rolling the database back can restore the key and
+forget the deletion. EraseKey keeps a separate deletion receipt journal to carry
+deletion intent across that boundary.
+
+## What is implemented
+
+- Tenant, dataset, and subject scoped records
+- AES-256-GCM envelope encryption
+- Mock and AWS KMS key providers
+- Pending, scheduled, canceled, blocked, and finalized deletion states
+- Legal holds and step-up checks for destructive operations
+- Hash-chained audit events
+- Signed deletion receipts with keyed subject references
+- Write blocking for scheduled and deleted subjects
+- Reconciliation of keys resurrected by a stale SQLite restore
+
+## How the restore flow works
+
+```text
+record -> subject data key -> wrapped by KMS provider
+                              |
+deletion finalized -----------+-> wrapped key removed
+                              +-> signed receipt journal
+
+stale database restore -> wrapped key returns
+                       -> receipt still exists
+                       -> reconciliation removes the key again
+```
+
+## Quick start
+
+```bash
+cd mvp/erasekey
+python -m venv .venv
+
+# Linux/macOS
+source .venv/bin/activate
+
+# Windows PowerShell
+.\.venv\Scripts\Activate.ps1
+
+pip install -r requirements.txt -r requirements-dev.txt
+uvicorn app.main:app --reload
+```
+
+Open `http://127.0.0.1:8000/docs` for the generated API documentation.
+
+Run the tests with:
+
+```bash
+python -m pytest -q tests
+```
+
+## Project map
+
+- [`mvp/erasekey/README.md`](mvp/erasekey/README.md): configuration and deletion workflow
+- [`mvp/erasekey/docs/architecture.md`](mvp/erasekey/docs/architecture.md): architecture and restore model
+- [`mvp/erasekey/docs/api-spec.md`](mvp/erasekey/docs/api-spec.md): endpoint summary
+- [`docs/adrs`](docs/adrs): design decisions and limitations
+
+## Scope
+
+This is an engineering demonstration, not a production privacy platform. The
+API has no tenant authentication, the mock step-up verifier is not real
+WebAuthn, and SQLite plus a local receipt file do not provide distributed
+durability. See the architecture notes for the remaining trust and failure
+boundaries.

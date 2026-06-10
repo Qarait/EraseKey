@@ -1,59 +1,50 @@
-# API overview
+# API Summary
 
-## POST /tenants
-Create a tenant.
+FastAPI publishes the complete OpenAPI document at `/docs`. This page is a
+short map of the available routes.
 
-## GET /tenants
-List tenants.
+## Service and diagnostics
 
-## POST /datasets
-Create a dataset under a tenant.
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/healthz` | Basic service health |
+| `GET` | `/admin/provider-status` | Active key-provider details |
+| `GET` | `/admin/security-status` | Authentication and policy-engine status |
+| `GET` | `/admin/audit/head` | Current audit-chain head |
+| `GET` | `/admin/audit/verify` | Verify the audit-event chain |
+| `GET` | `/admin/deletion-receipts/verify` | Verify the signed receipt journal |
+| `POST` | `/admin/restore/reconcile` | Reapply deletion receipts after a stale restore |
 
-## GET /datasets?tenant_id=
-List datasets, optionally filtered by tenant.
+## Step-up challenges
 
-## POST /records
-Ingest an encrypted record.
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/auth/step-up/challenge` | Issue a short-lived challenge for sensitive operations |
 
-Request body:
+The bundled challenge mechanism is a local demonstration. It is not a
+replacement for an identity provider or production MFA.
 
-```json
-{
-  "tenant_id": "tenant_xxx",
-  "dataset_id": "dataset_xxx",
-  "subject_id": "user_123",
-  "record_type": "ticket",
-  "payload": {"email": "user@example.com", "message": "Delete me"}
-}
-```
+## Tenants, datasets, and records
 
-## GET /records/{record_id}
-Read a record. Returns `erase_status=cryptographically_erased` when the key is gone.
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/tenants` | Create a tenant |
+| `GET` | `/tenants` | List tenants |
+| `POST` | `/datasets` | Create a dataset for a tenant |
+| `GET` | `/datasets` | List datasets, optionally filtered by tenant |
+| `POST` | `/records` | Encrypt and store a record |
+| `GET` | `/records/{record_id}` | Decrypt a live record |
 
-## POST /legal-holds
-Create a legal hold.
+## Holds and deletion requests
 
-## POST /legal-holds/{hold_id}/release
-Release a legal hold.
-
-## POST /deletion-requests
-Create a deletion request.
-
-## GET /deletion-requests/{request_id}
-Read deletion-request status.
-
-## POST /deletion-requests/{request_id}/execute
-Execute cryptographic erasure for active subject keys.
-
-## GET /deletion-requests/{request_id}/evidence
-Return machine-readable evidence after execution.
-
-## GET /audit-events
-List recent audit events. Supports `entity_type` and `entity_id` filters.
-
-## GET /admin/deletion-receipts/verify
-Verify signatures for the external deletion receipt journal.
-
-## POST /admin/restore/reconcile
-Compare valid external receipts with local subject keys and destroy key material
-that was resurrected by a stale database restore.
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/legal-holds` | Place a legal hold |
+| `POST` | `/legal-holds/{hold_id}/release` | Release a legal hold |
+| `POST` | `/deletion-requests` | Create a deletion request |
+| `GET` | `/deletion-requests/{request_id}` | Read request state |
+| `POST` | `/deletion-requests/{request_id}/execute` | Schedule erasure, or finalize immediately when the window is zero |
+| `POST` | `/deletion-requests/{request_id}/cancel` | Cancel a scheduled request |
+| `POST` | `/deletion-requests/{request_id}/finalize` | Finalize a due request |
+| `GET` | `/deletion-requests/{request_id}/evidence` | Return deletion evidence |
+| `GET` | `/audit-events` | List audit events with optional entity filters |

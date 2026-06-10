@@ -1,89 +1,57 @@
 # Architecture
 
-## Architecture
-
 ```text
-Client / Privacy Ops
-        |
-        v
-   FastAPI Service
-        |
-        +--> SQLite metadata store
-        |      - tenants
-        |      - datasets
-        |      - subject_keys
-        |      - records
-        |      - legal_holds
-        |      - deletion_requests
-        |      - audit_events
-        |
-        +--> Envelope crypto
-               - demo root key provider
-               - wrapped per-subject data keys
-
-        +--> External receipt journal
-               - keyed subject references
-               - signed deletion receipts
-               - stale-restore reconciliation
+Client / Privacy Operations
+            |
+            v
+       FastAPI API
+            |
+     Service layer
+       /         \
+      v           v
+ SQLite state   Signed receipt journal
+      |
+      v
+ Key provider (local AES-GCM or AWS KMS)
 ```
 
 ## Key hierarchy
 
-1. Root key (demo-only in a local file for this repo)
-2. Subject-scoped data key per tenant + dataset + subject
-3. Individual records encrypted under the active subject data key
+1. A configured key provider generates or unwraps data-encryption keys.
+2. Each subject has a wrapped key scoped to its tenant and dataset.
+3. Record payloads are encrypted with their subject key.
 
-## Why subject-scoped keys
-Deletion is often requested per person, not per entire dataset. If you encrypt everything with one dataset key, deleting one person’s data becomes too coarse. Subject-scoped keys make deletion granular.
+Subject-scoped keys make deletion granular. A dataset-wide key would make a
+single person's erasure too coarse because destroying it would affect every
+record in the dataset.
 
 ## Record flow
 
-1. Client submits a record with `tenant_id`, `dataset_id`, `subject_id`, and `payload`.
-2. EraseKey looks up an active subject key.
-3. If none exists, EraseKey generates one and stores only the wrapped form.
-4. The payload is encrypted with AES-256-GCM.
-5. The encrypted record and authenticated metadata are stored.
+When a record is created, the service resolves the tenant, dataset, and subject
+key, encrypts the JSON payload with AES-GCM, and stores the ciphertext and
+authenticated metadata in SQLite.
 
 ## Erasure flow
 
-1. Privacy team creates a deletion request.
-2. EraseKey checks for active legal holds.
-3. If blocked, the request stays blocked.
-4. If allowed, EraseKey destroys the wrapped subject keys.
-5. Records encrypted under those keys become unreadable.
-6. An evidence object is written back to the request and the audit log.
+An approved deletion request enters a configurable execution window. Once it
+is finalized, EraseKey removes the wrapped subject key, marks the subject as
+erased, appends a signed deletion receipt, and records the action in the audit
+chain. The ciphertext remains but can no longer be decrypted through the
+application.
 
-## Why ciphertext remains
-That is deliberate. The product is modeling backup and cold-storage reality: data copies may continue to exist physically, but once key material is gone, those copies are no longer usable.
+## Restore flow
 
-## Deletion continuity after restore
-
-SQLite is not the source of truth for completed erasures. Finalization also
-writes a signed receipt to a separate append-only journal. The receipt contains
-a keyed subject reference rather than the raw subject identifier.
-
-After restoring stale application state, the restore guard:
-
-1. verifies the journal signatures;
-2. scans local subject keys in the receipted tenant and dataset;
-3. derives keyed references for local subjects;
-4. destroys any resurrected wrapped key that matches a receipt;
-5. adds a `restore.re_erased` event to the audit chain.
-
-The receipt journal and its signing key must live outside the database backup
-domain for this property to hold.
-
-## Production evolution
-
-Replace the demo key wrapper with a real control plane:
-
-- AWS KMS for key wrapping and deletion orchestration
-- S3 object connectors
-- Postgres / RDS connector for live-system deletes
-- Warehouse tombstones for analytics pipelines
-- Signed evidence bundles for auditors
+A stale database backup may still contain a wrapped key that existed before
+deletion. The append-only receipt journal is stored separately from the
+database backup. After a restore, reconciliation verifies the journal and
+reapplies any missing erasures before records are served.
 
 ## Limitations
 
-The local API is unauthenticated. The receipt signing key is stored on disk for
-the demo; a deployed system would use a managed key in a separate trust domain.
+- The local API is unauthenticated unless authentication is explicitly enabled.
+- The local key and receipt-signing secret are development conveniences.
+- SQLite updates and receipt appends are separate writes. A process failure
+  between them can leave the two stores inconsistent; a production design
+  should use an outbox or another transactional handoff.
+- The audit hash chain detects edits only while its head is independently
+  trusted. A database administrator could otherwise rewrite the chain.

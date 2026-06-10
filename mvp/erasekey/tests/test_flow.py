@@ -10,7 +10,6 @@ import json
 
 BASE_TEMP = tempfile.mkdtemp(prefix='erasekey_test_')
 os.environ['ERASEKEY_DB_PATH'] = str(Path(BASE_TEMP) / 'test.db')
-os.environ['ERASEKEY_ROOT_KEY_PATH'] = str(Path(BASE_TEMP) / '.root_kek')
 os.environ['ERASEKEY_RECEIPT_LOG_PATH'] = str(Path(BASE_TEMP) / 'deletion_receipts.jsonl')
 os.environ['ERASEKEY_RECEIPT_SIGNING_KEY_PATH'] = str(Path(BASE_TEMP) / '.receipt_signing_key')
 os.environ['ERASEKEY_KMS_MODE'] = 'mock'

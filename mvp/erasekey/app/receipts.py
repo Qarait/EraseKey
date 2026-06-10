@@ -100,29 +100,39 @@ def verify_receipt(receipt: dict[str, Any]) -> bool:
     return hmac.compare_digest(signature, _signature(payload))
 
 
-def verify_receipt_log() -> dict[str, Any]:
-    receipts = list(iter_receipts())
+def verify_receipt_log(
+    receipts: Iterable[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    loaded_receipts = list(iter_receipts() if receipts is None else receipts)
     invalid_ids = [
         receipt.get("receipt_id", "malformed")
-        for receipt in receipts
+        for receipt in loaded_receipts
         if not verify_receipt(receipt)
     ]
     return {
         "ok": not invalid_ids,
-        "receipt_count": len(receipts),
+        "receipt_count": len(loaded_receipts),
         "invalid_receipt_ids": invalid_ids,
     }
 
 
-def valid_receipts() -> list[dict[str, Any]]:
-    return [receipt for receipt in iter_receipts() if verify_receipt(receipt)]
+def valid_receipts(
+    receipts: Iterable[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    loaded_receipts = iter_receipts() if receipts is None else receipts
+    return [receipt for receipt in loaded_receipts if verify_receipt(receipt)]
 
 
-def has_deletion_receipt(tenant_id: str, dataset_id: str, subject_id: str) -> bool:
+def has_deletion_receipt(
+    tenant_id: str,
+    dataset_id: str,
+    subject_id: str,
+    receipts: Iterable[dict[str, Any]] | None = None,
+) -> bool:
     expected_ref = subject_ref(subject_id)
     return any(
         receipt["tenant_id"] == tenant_id
         and receipt["dataset_id"] == dataset_id
         and receipt["subject_ref"] == expected_ref
-        for receipt in valid_receipts()
+        for receipt in valid_receipts(receipts)
     )

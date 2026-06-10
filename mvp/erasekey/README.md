@@ -32,11 +32,14 @@ Instead of pretending every copy of user data can be physically deleted immediat
 
 ```text
 app/
+  auth.py           # Local step-up challenge boundary
   config.py         # Environment-driven configuration
   crypto.py         # AES-256-GCM logic
   db.py             # SQLite schema and connections
   key_providers.py  # Mock/AWS Root Key Providers
   main.py           # API routes and entry point
+  policy_engine.py  # Local and external policy adapters
+  receipts.py       # Signed deletion receipt journal
   schemas.py        # Pydantic models
   services.py       # Core business logic
   utils.py          # ID generation and hashing
@@ -45,6 +48,7 @@ scripts/
   finalize_worker.py # Background worker for due deletions
 tests/
   test_flow.py      # E2E lifecycle and safety tests
+  test_security.py  # Step-up, policy, and audit tests
 ```
 
 ## Running Locally
@@ -54,7 +58,7 @@ tests/
    cd mvp/erasekey
    python -m venv .venv
    source .venv/bin/activate  # or .venv\Scripts\activate on Windows
-   pip install -r requirements.txt
+   pip install -r requirements.txt -r requirements-dev.txt
    ```
 
 2. Run the server:
@@ -64,17 +68,19 @@ tests/
 
 3. Open the API docs at `http://127.0.0.1:8000/docs`.
 
-## Production Configuration
+## Configuration
 
 EraseKey behavior is controlled by environment variables:
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| `ERASEKEY_KMS_MODE` | `mock` | `mock` for local development, `aws` for production. |
+| `ERASEKEY_KMS_MODE` | `mock` | `mock` for local development, `aws` for the AWS adapter. |
 | `ERASEKEY_AWS_KMS_KEY_ID` | None | The ARN or ID of the CMK in AWS KMS. |
 | `ERASEKEY_DELETION_WINDOW_DAYS` | `7` | Mandatory waiting period before keys can be destroyed. |
 | `ERASEKEY_RECEIPT_LOG_PATH` | `data/deletion_receipts.jsonl` | Receipt journal stored separately from application state. |
 | `ERASEKEY_RECEIPT_SIGNING_KEY_PATH` | `data/.receipt_signing_key` | Local HMAC key used to sign and identify receipts in demo mode. |
+| `ERASEKEY_STEP_UP_MODE` | `mock` | `webauthn` is reserved but not implemented. |
+| `ERASEKEY_POLICY_ENGINE_MODE` | `local` | Set to `gate1` to exercise the fail-closed external adapter. |
 
 ## Deletion Semantics
 
@@ -106,3 +112,8 @@ The API has no production authentication and should not be exposed to an
 untrusted network. The local HMAC journal is enough to demonstrate the restore
 protocol. A production design would keep receipts in immutable storage and use a
 managed signing key outside the database backup domain.
+
+Finalization updates SQLite and appends to the receipt file as two separate
+writes. A process crash between those operations can leave them inconsistent.
+A production design should use a durable outbox or another transactional
+handoff to the external receipt store.
