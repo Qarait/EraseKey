@@ -33,6 +33,7 @@ deletion intent across that boundary.
 - Idempotent receipt creation for safe finalization retries
 - Write blocking for scheduled and deleted subjects
 - Startup reconciliation of keys resurrected by a stale SQLite restore
+- A local Restore Lab dashboard that demonstrates the complete failure and recovery path
 
 ## How the restore flow works
 
@@ -64,6 +65,7 @@ uvicorn app.main:app --reload
 ```
 
 Open `http://127.0.0.1:8000/docs` for the generated API documentation.
+Open `http://127.0.0.1:8000/dashboard` for the interactive Restore Lab.
 
 Run the tests with:
 

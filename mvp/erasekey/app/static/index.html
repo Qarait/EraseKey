@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A local dashboard for demonstrating restore-safe cryptographic deletion.">
+  <title>EraseKey Restore Lab</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/dashboard" aria-label="EraseKey home">
+      <span class="brand-mark" aria-hidden="true">EK</span>
+      <span>
+        <strong>EraseKey</strong>
+        <small>Restore Lab</small>
+      </span>
+    </a>
+    <div class="header-actions">
+      <span class="local-badge"><span></span> Local demonstration</span>
+      <a class="text-link" href="/docs">API docs</a>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">Cryptographic deletion, tested against time travel</p>
+        <h1>What happens when an old backup brings a deleted key back?</h1>
+        <p class="lede">
+          Run the complete experiment locally. EraseKey encrypts a sample
+          record, destroys its subject key, restores stale key state, then uses
+          a signed receipt to erase it again.
+        </p>
+        <div class="hero-actions">
+          <button id="run-demo" class="primary-button" type="button">
+            <span>Run restore scenario</span>
+            <span aria-hidden="true">→</span>
+          </button>
+          <button id="reset-view" class="secondary-button" type="button" hidden>
+            Clear results
+          </button>
+        </div>
+        <p class="safety-note">
+          Uses generated sample data and the mock KMS. Do not expose this demo
+          server to the public internet.
+        </p>
+      </div>
+
+      <aside class="concept-card" aria-label="Concept overview">
+        <p class="card-kicker">The restore gap</p>
+        <div class="concept-row">
+          <span class="concept-index">01</span>
+          <div>
+            <strong>Delete the key</strong>
+            <p>The ciphertext remains, but the record cannot be decrypted.</p>
+          </div>
+        </div>
+        <div class="concept-row">
+          <span class="concept-index">02</span>
+          <div>
+            <strong>Restore an old database</strong>
+            <p>The stale wrapped key makes the record readable again.</p>
+          </div>
+        </div>
+        <div class="concept-row">
+          <span class="concept-index">03</span>
+          <div>
+            <strong>Reapply the receipt</strong>
+            <p>An external deletion receipt identifies and destroys the key.</p>
+          </div>
+        </div>
+      </aside>
+    </section>
+
+    <section id="results" class="results" aria-live="polite">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Scenario timeline</p>
+          <h2 id="results-title">Ready to run</h2>
+        </div>
+        <p id="scenario-meta" class="scenario-meta">
+          Four real state transitions will appear here.
+        </p>
+      </div>
+
+      <div id="timeline" class="timeline">
+        <article class="phase-card placeholder">
+          <span class="phase-number">1</span>
+          <p>Encrypted record</p>
+        </article>
+        <article class="phase-card placeholder">
+          <span class="phase-number">2</span>
+          <p>Key destroyed</p>
+        </article>
+        <article class="phase-card placeholder">
+          <span class="phase-number">3</span>
+          <p>Stale restore</p>
+        </article>
+        <article class="phase-card placeholder">
+          <span class="phase-number">4</span>
+          <p>Receipt reapplied</p>
+        </article>
+      </div>
+
+      <div id="verification-grid" class="verification-grid" hidden>
+        <article class="verification-card">
+          <div class="verification-heading">
+            <span class="status-icon" id="receipt-icon">✓</span>
+            <div>
+              <p class="card-kicker">Receipt journal</p>
+              <h3 id="receipt-title">Verified</h3>
+            </div>
+          </div>
+          <p id="receipt-detail"></p>
+        </article>
+
+        <article class="verification-card">
+          <div class="verification-heading">
+            <span class="status-icon" id="audit-icon">✓</span>
+            <div>
+              <p class="card-kicker">Audit chain</p>
+              <h3 id="audit-title">Verified</h3>
+            </div>
+          </div>
+          <p id="audit-detail"></p>
+        </article>
+
+        <article class="verification-card accent-card">
+          <p class="card-kicker">Recovery result</p>
+          <h3 id="recovery-title">Key erased again</h3>
+          <p id="recovery-detail"></p>
+        </article>
+      </div>
+
+      <details id="technical-details" class="technical-details" hidden>
+        <summary>View technical evidence</summary>
+        <div class="detail-grid">
+          <div>
+            <span>Deletion request</span>
+            <code id="request-id"></code>
+          </div>
+          <div>
+            <span>Subject reference</span>
+            <code id="subject-ref"></code>
+          </div>
+          <div>
+            <span>Receipt ID</span>
+            <code id="receipt-id"></code>
+          </div>
+          <div>
+            <span>Audit head</span>
+            <code id="audit-head"></code>
+          </div>
+        </div>
+      </details>
+
+      <div id="error-panel" class="error-panel" hidden>
+        <strong>The scenario could not complete.</strong>
+        <p id="error-message"></p>
+      </div>
+    </section>
+
+    <section class="boundary-section">
+      <div>
+        <p class="eyebrow">What this proves</p>
+        <h2>A deletion decision can survive a stale application restore.</h2>
+      </div>
+      <div class="boundary-copy">
+        <p>
+          The receipt journal is deliberately outside SQLite. On application
+          startup, EraseKey verifies it and reapplies completed erasures before
+          serving traffic.
+        </p>
+        <p>
+          This is an engineering demonstration, not a compliance product or a
+          distributed transaction. Real deployments need independent,
+          immutable receipt storage and managed signing keys.
+        </p>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>EraseKey is an open engineering experiment.</p>
+    <a href="https://github.com/Qarait/EraseKey">View source on GitHub</a>
+  </footer>
+
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

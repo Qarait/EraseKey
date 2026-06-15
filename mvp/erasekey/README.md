@@ -36,12 +36,14 @@ app/
   config.py         # Environment-driven configuration
   crypto.py         # AES-256-GCM logic
   db.py             # SQLite schema and connections
+  demo.py           # Mock-only stale-restore scenario
   key_providers.py  # Mock/AWS Root Key Providers
   main.py           # API routes and entry point
   policy_engine.py  # Local and external policy adapters
   receipts.py       # Signed deletion receipt journal
   schemas.py        # Pydantic models
   services.py       # Core business logic
+  static/           # Restore Lab HTML, CSS, and JavaScript
   utils.py          # ID generation and hashing
 scripts/
   aws_smoke_test.py # Verification for AWS KMS connectivity
@@ -66,7 +68,13 @@ tests/
    uvicorn app.main:app --reload
    ```
 
-3. Open the API docs at `http://127.0.0.1:8000/docs`.
+3. Open the Restore Lab dashboard at `http://127.0.0.1:8000/dashboard`.
+
+   The dashboard runs a generated, mock-KMS scenario that shows a record moving
+   from readable, to erased, back to readable after stale key restoration, and
+   finally to erased again after receipt reconciliation.
+
+4. Open the API docs at `http://127.0.0.1:8000/docs`.
 
 ## Configuration
 
@@ -94,6 +102,10 @@ EraseKey behavior is controlled by environment variables:
    Run `python scripts/finalize_worker.py` to automatically finalize all requests whose waiting period has expired.
 
 ## Restore-Safety Demo
+
+The dashboard runs this complete sequence automatically. The mock-only
+`POST /demo/restore-scenario` endpoint exists for that local demonstration and
+should not be exposed to an untrusted network.
 
 1. Create a tenant, dataset, record, and deletion request.
 2. Finalize the deletion. EraseKey destroys the wrapped subject key and appends a signed receipt.
