@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Optional, Any, Union
 
 from fastapi import FastAPI, Body, HTTPException
+from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from .config import settings
 from .db import init_db
@@ -51,8 +54,12 @@ from .services import (
     ActorType,
 )
 from .auth import verifier
+from .demo import run_restore_scenario
 from . import utils
 from .receipts import verify_receipt_log
+
+
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 @asynccontextmanager
@@ -75,6 +82,17 @@ app = FastAPI(
     ),
     lifespan=lifespan,
 )
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+@app.get("/", include_in_schema=False)
+def root() -> RedirectResponse:
+    return RedirectResponse(url="/dashboard")
+
+
+@app.get("/dashboard", include_in_schema=False)
+def dashboard() -> FileResponse:
+    return FileResponse(STATIC_DIR / "index.html")
 
 
 @app.get('/healthz', response_model=HealthOut)
@@ -165,6 +183,11 @@ def api_verify_deletion_receipts() -> ReceiptVerificationOut:
 @app.post('/admin/restore/reconcile', response_model=RestoreReconciliationOut)
 def api_reconcile_restored_data() -> RestoreReconciliationOut:
     return RestoreReconciliationOut(**reconcile_deletion_receipts())
+
+
+@app.post("/demo/restore-scenario")
+def api_run_restore_scenario() -> dict[str, Any]:
+    return run_restore_scenario()
 
 
 @app.post('/tenants', response_model=TenantOut, status_code=201)

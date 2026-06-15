@@ -592,7 +592,12 @@ def get_deletion_request(request_id: str) -> dict[str, Any]:
         return _row_to_dict(row) or {}
 
 
-def execute_deletion_request(request_id: str, step_up_verified: bool = False, actor_type: ActorType = ActorType.HUMAN) -> dict[str, Any]:
+def execute_deletion_request(
+    request_id: str,
+    step_up_verified: bool = False,
+    actor_type: ActorType = ActorType.HUMAN,
+    deletion_window_days: int | None = None,
+) -> dict[str, Any]:
     with get_conn() as conn:
         row = conn.execute('SELECT * FROM deletion_requests WHERE id = ?', (request_id,)).fetchone()
         if row is None:
@@ -623,7 +628,11 @@ def execute_deletion_request(request_id: str, step_up_verified: bool = False, ac
         if decision.decision == PolicyDecision.DENY:
             _handle_policy_deny(conn, request_id, decision, "deletion_request", actor_type)
 
-        window = settings.deletion_window_days
+        window = (
+            settings.deletion_window_days
+            if deletion_window_days is None
+            else deletion_window_days
+        )
         now = utils.utc_now()
 
         if window == 0:

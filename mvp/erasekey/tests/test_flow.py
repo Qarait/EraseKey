@@ -593,5 +593,31 @@ class EraseKeyFlowTests(unittest.TestCase):
             with TestClient(app):
                 pass
 
+    def test_dashboard_is_served(self) -> None:
+        response = self.client.get('/dashboard')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('EraseKey Restore Lab', response.text)
+        self.assertIn('/static/app.js', response.text)
+
+    def test_restore_lab_scenario_runs_end_to_end(self) -> None:
+        response = self.client.post('/demo/restore-scenario')
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(
+            [phase['erase_status'] for phase in data['timeline']],
+            [
+                'readable',
+                'cryptographically_erased',
+                'readable',
+                'cryptographically_erased',
+            ],
+        )
+        self.assertTrue(data['receipt_verification']['ok'])
+        self.assertTrue(data['audit_verification']['ok'])
+        self.assertEqual(len(data['reconciliation']['re_erased_key_ids']), 1)
+        self.assertEqual(data['evidence']['status'], 'finalized')
+
 if __name__ == '__main__':
     unittest.main()
