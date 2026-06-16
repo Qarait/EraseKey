@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from collections import defaultdict, deque
 from pathlib import Path
+from time import monotonic
 from typing import Optional, Any, Union
 
-from fastapi import FastAPI, Body, HTTPException
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi import FastAPI, Body, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import settings
@@ -60,6 +62,13 @@ from .receipts import verify_receipt_log
 
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+PUBLIC_DEMO_ALLOWED_ROUTES = {
+    ("GET", "/"),
+    ("GET", "/dashboard"),
+    ("GET", "/healthz"),
+    ("POST", "/demo/restore-scenario"),
+}
+PUBLIC_DEMO_RATE_WINDOW_SECONDS = 60.0
 
 
 @asynccontextmanager
@@ -83,6 +92,54 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.state.public_demo_rate_limits = defaultdict(deque)
+
+
+def _public_demo_route_allowed(method: str, path: str) -> bool:
+    if method == "GET" and path.startswith("/static/"):
+        return True
+    return (method, path) in PUBLIC_DEMO_ALLOWED_ROUTES
+
+
+def _demo_rate_limited(request: Request) -> bool:
+    if request.method != "POST" or request.url.path != "/demo/restore-scenario":
+        return False
+
+    client_host = request.client.host if request.client else "unknown"
+    now = monotonic()
+    events = app.state.public_demo_rate_limits[client_host]
+    while events and now - events[0] > PUBLIC_DEMO_RATE_WINDOW_SECONDS:
+        events.popleft()
+    if len(events) >= settings.public_demo_rate_limit_per_minute:
+        return True
+    events.append(now)
+    return False
+
+
+@app.middleware("http")
+async def public_demo_guard(request: Request, call_next):
+    if settings.public_demo_mode:
+        if not _public_demo_route_allowed(request.method, request.url.path):
+            return JSONResponse(
+                status_code=404,
+                content={"detail": "Public demo mode exposes only the dashboard."},
+            )
+        if _demo_rate_limited(request):
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Too many demo runs. Try again in a minute."},
+            )
+
+    response = await call_next(request)
+    if settings.public_demo_mode:
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; script-src 'self'; style-src 'self'; "
+            "img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'"
+        )
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+    return response
 
 
 @app.get("/", include_in_schema=False)

@@ -9,6 +9,13 @@ DATA_DIR = BASE_DIR / 'data'
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class Settings:
     app_name: str = os.getenv("ERASEKEY_APP_NAME", "EraseKey")
@@ -38,5 +45,9 @@ class Settings:
         "local",
     ).lower()
     gate1_cli_path: str = os.getenv("ERASEKEY_GATE1_CLI_PATH", "gate1")
+    public_demo_mode: bool = _env_bool("ERASEKEY_PUBLIC_DEMO_MODE")
+    public_demo_rate_limit_per_minute: int = int(
+        os.getenv("ERASEKEY_PUBLIC_DEMO_RATE_LIMIT_PER_MINUTE", "12")
+    )
 
 settings = Settings()
