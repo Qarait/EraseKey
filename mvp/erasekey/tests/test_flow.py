@@ -619,5 +619,58 @@ class EraseKeyFlowTests(unittest.TestCase):
         self.assertEqual(len(data['reconciliation']['re_erased_key_ids']), 1)
         self.assertEqual(data['evidence']['status'], 'finalized')
 
+    def test_public_demo_mode_exposes_only_sandbox_surface(self) -> None:
+        from app.config import settings
+
+        original_mode = settings.public_demo_mode
+        original_limit = settings.public_demo_rate_limit_per_minute
+        object.__setattr__(settings, 'public_demo_mode', True)
+        object.__setattr__(settings, 'public_demo_rate_limit_per_minute', 12)
+        app.state.public_demo_rate_limits.clear()
+        try:
+            dashboard = self.client.get('/dashboard')
+            self.assertEqual(dashboard.status_code, 200)
+            self.assertEqual(dashboard.headers['x-frame-options'], 'DENY')
+            self.assertIn("default-src 'self'", dashboard.headers['content-security-policy'])
+
+            health = self.client.get('/healthz')
+            self.assertEqual(health.status_code, 200)
+
+            blocked_api = self.client.post('/tenants', json={'name': 'Blocked'})
+            self.assertEqual(blocked_api.status_code, 404)
+
+            docs = self.client.get('/docs')
+            self.assertEqual(docs.status_code, 404)
+
+            scenario = self.client.post('/demo/restore-scenario')
+            self.assertEqual(scenario.status_code, 200)
+            self.assertEqual(
+                scenario.json()['timeline'][-1]['erase_status'],
+                'cryptographically_erased',
+            )
+        finally:
+            object.__setattr__(settings, 'public_demo_mode', original_mode)
+            object.__setattr__(settings, 'public_demo_rate_limit_per_minute', original_limit)
+            app.state.public_demo_rate_limits.clear()
+
+    def test_public_demo_mode_rate_limits_scenario_runs(self) -> None:
+        from app.config import settings
+
+        original_mode = settings.public_demo_mode
+        original_limit = settings.public_demo_rate_limit_per_minute
+        object.__setattr__(settings, 'public_demo_mode', True)
+        object.__setattr__(settings, 'public_demo_rate_limit_per_minute', 1)
+        app.state.public_demo_rate_limits.clear()
+        try:
+            first = self.client.post('/demo/restore-scenario')
+            second = self.client.post('/demo/restore-scenario')
+
+            self.assertEqual(first.status_code, 200)
+            self.assertEqual(second.status_code, 429)
+        finally:
+            object.__setattr__(settings, 'public_demo_mode', original_mode)
+            object.__setattr__(settings, 'public_demo_rate_limit_per_minute', original_limit)
+            app.state.public_demo_rate_limits.clear()
+
 if __name__ == '__main__':
     unittest.main()

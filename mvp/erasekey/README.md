@@ -89,6 +89,25 @@ EraseKey behavior is controlled by environment variables:
 | `ERASEKEY_RECEIPT_SIGNING_KEY_PATH` | `data/.receipt_signing_key` | Local HMAC key used to sign and identify receipts in demo mode. |
 | `ERASEKEY_STEP_UP_MODE` | `mock` | `webauthn` is reserved but not implemented. |
 | `ERASEKEY_POLICY_ENGINE_MODE` | `local` | Set to `gate1` to exercise the fail-closed external adapter. |
+| `ERASEKEY_PUBLIC_DEMO_MODE` | `false` | Restricts the app to the hosted dashboard sandbox surface. |
+| `ERASEKEY_PUBLIC_DEMO_RATE_LIMIT_PER_MINUTE` | `12` | Per-client scenario run limit in public demo mode. |
+
+## Public demo mode
+
+Set `ERASEKEY_PUBLIC_DEMO_MODE=true` when hosting a public sandbox. This mode
+keeps the normal development API out of reach and exposes only the dashboard,
+static assets, health check, and mock restore scenario endpoint. It also hides
+`/docs`, applies basic browser security headers, and rate-limits scenario runs.
+
+Use the root `Dockerfile` for a containerized demo:
+
+```bash
+docker build -t erasekey-demo ../..
+docker run --rm -p 8000:8000 erasekey-demo
+```
+
+The Docker image uses mock KMS and temporary container storage. It is meant for
+an educational sandbox, not persistent user accounts or real deletion evidence.
 
 ## Deletion Semantics
 

@@ -67,6 +67,26 @@ uvicorn app.main:app --reload
 Open `http://127.0.0.1:8000/docs` for the generated API documentation.
 Open `http://127.0.0.1:8000/dashboard` for the interactive Restore Lab.
 
+## Public demo mode
+
+For a hosted sandbox, run with `ERASEKEY_PUBLIC_DEMO_MODE=true`. Public demo
+mode exposes only:
+
+- `GET /`
+- `GET /dashboard`
+- `GET /healthz`
+- `GET /static/*`
+- `POST /demo/restore-scenario`
+
+It blocks the raw API and `/docs`, adds basic browser security headers, and
+rate-limits demo scenario runs. The included `Dockerfile` starts in this mode
+with mock KMS and temporary container storage.
+
+```bash
+docker build -t erasekey-demo .
+docker run --rm -p 8000:8000 erasekey-demo
+```
+
 Run the tests with:
 
 ```bash
