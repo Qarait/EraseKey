@@ -19,6 +19,7 @@ Instead of pretending every copy of user data can be physically deleted immediat
 - A hash-chained audit log.
 - Signed deletion receipts stored outside SQLite.
 - Reconciliation that removes keys resurrected by a stale restore.
+- Read-time receipt checks that keep resurrected keys unreadable before reconciliation completes.
 - Write blocking for subjects with pending or completed deletion.
 
 ## Tech Stack
@@ -91,13 +92,18 @@ EraseKey behavior is controlled by environment variables:
 | `ERASEKEY_POLICY_ENGINE_MODE` | `local` | Set to `gate1` to exercise the fail-closed external adapter. |
 | `ERASEKEY_PUBLIC_DEMO_MODE` | `false` | Restricts the app to the hosted dashboard sandbox surface. |
 | `ERASEKEY_PUBLIC_DEMO_RATE_LIMIT_PER_MINUTE` | `12` | Per-client scenario run limit in public demo mode. |
+| `ERASEKEY_ENABLE_DEMO_ENDPOINT` | `true` | Enables the mock restore scenario for local dashboard use. |
 
 ## Public demo mode
 
 Set `ERASEKEY_PUBLIC_DEMO_MODE=true` when hosting a public sandbox. This mode
 keeps the normal development API out of reach and exposes only the dashboard,
 static assets, health check, and mock restore scenario endpoint. It also hides
-`/docs`, applies basic browser security headers, and rate-limits scenario runs.
+`/docs`, applies basic browser security headers, cleans generated scenario
+state after each public run, and rate-limits scenario runs.
+
+The in-process rate limit is only a guardrail. A public deployment should also
+use hosting-layer or reverse-proxy rate limits.
 
 Use the root `Dockerfile` for a containerized demo:
 
@@ -108,6 +114,7 @@ docker run --rm -p 8000:8000 erasekey-demo
 
 The Docker image uses mock KMS and temporary container storage. It is meant for
 an educational sandbox, not persistent user accounts or real deletion evidence.
+It runs as a non-root user.
 
 ## Deletion Semantics
 

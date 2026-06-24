@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -19,7 +21,67 @@ from .services import (
     verify_audit_chain,
 )
 from .receipts import verify_receipt_log
-from .utils import new_id
+from .utils import canonical_json, new_id
+
+
+def _rewrite_receipt_log_without_request(request_id: str) -> None:
+    log_path = Path(settings.receipt_log_path)
+    if not log_path.exists():
+        return
+
+    retained_lines: list[str] = []
+    for line in log_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            receipt = json.loads(line)
+        except json.JSONDecodeError:
+            retained_lines.append(line)
+            continue
+        if receipt.get("request_id") != request_id:
+            retained_lines.append(canonical_json(receipt))
+
+    with log_path.open("w", encoding="utf-8") as handle:
+        for line in retained_lines:
+            handle.write(line + "\n")
+        handle.flush()
+
+
+def _cleanup_public_demo_rows(
+    *,
+    tenant_id: str,
+    dataset_id: str,
+    subject_id: str,
+    record_id: str,
+    request_id: str,
+) -> None:
+    with get_conn() as conn:
+        conn.execute("DELETE FROM records WHERE id = ?", (record_id,))
+        conn.execute(
+            """
+            DELETE FROM subject_keys
+            WHERE tenant_id = ? AND dataset_id = ? AND subject_id = ?
+            """,
+            (tenant_id, dataset_id, subject_id),
+        )
+        conn.execute("DELETE FROM deletion_requests WHERE id = ?", (request_id,))
+        conn.execute("DELETE FROM datasets WHERE id = ?", (dataset_id,))
+        conn.execute("DELETE FROM tenants WHERE id = ?", (tenant_id,))
+        conn.execute(
+            """
+            DELETE FROM audit_events
+            WHERE entity_id IN (?, ?, ?, ?)
+               OR payload_json LIKE ?
+            """,
+            (
+                tenant_id,
+                dataset_id,
+                record_id,
+                request_id,
+                f"%{subject_id}%",
+            ),
+        )
+    _rewrite_receipt_log_without_request(request_id)
 
 
 def run_restore_scenario() -> dict[str, Any]:
@@ -115,11 +177,11 @@ def run_restore_scenario() -> dict[str, Any]:
             (deletion_request["id"],),
         )
 
-    after_stale_restore = read_record(record["id"])
+    after_stale_restore = read_record(record["id"], enforce_receipts=False)
     reconciliation = reconcile_deletion_receipts()
     after_reconciliation = read_record(record["id"])
 
-    return {
+    result = {
         "scenario_id": scenario_id,
         "tenant": tenant,
         "dataset": dataset,
@@ -161,3 +223,12 @@ def run_restore_scenario() -> dict[str, Any]:
         "reconciliation": reconciliation,
         "evidence": get_evidence(finalized_request["id"]),
     }
+    if settings.public_demo_mode:
+        _cleanup_public_demo_rows(
+            tenant_id=tenant["id"],
+            dataset_id=dataset["id"],
+            subject_id=subject_id,
+            record_id=record["id"],
+            request_id=deletion_request["id"],
+        )
+    return result

@@ -7,6 +7,7 @@ const verificationGrid = document.querySelector("#verification-grid");
 const technicalDetails = document.querySelector("#technical-details");
 const errorPanel = document.querySelector("#error-panel");
 const errorMessage = document.querySelector("#error-message");
+const apiDocsLink = document.querySelector("[data-api-docs]");
 
 const phaseDescriptions = {
   encrypted: "The subject key decrypts the sample record.",
@@ -59,14 +60,14 @@ function renderVerification(data) {
     "#receipt-detail",
     `${receipt.receipt_count} signed receipt${receipt.receipt_count === 1 ? "" : "s"} checked.`
   );
-  setText("#receipt-icon", receipt.ok ? "✓" : "!");
+  setText("#receipt-icon", receipt.ok ? "OK" : "!");
 
   setText("#audit-title", audit.ok ? "Chain intact" : "Chain invalid");
   setText(
     "#audit-detail",
     `${audit.verified_count} audit event${audit.verified_count === 1 ? "" : "s"} verified.`
   );
-  setText("#audit-icon", audit.ok ? "✓" : "!");
+  setText("#audit-icon", audit.ok ? "OK" : "!");
 
   setText("#recovery-title", "Key erased again");
   setText(
@@ -148,3 +149,14 @@ async function runScenario() {
 
 runButton.addEventListener("click", runScenario);
 resetButton.addEventListener("click", resetResults);
+
+fetch("/demo/status")
+  .then((response) => response.json())
+  .then((status) => {
+    if (status.public_demo_mode && apiDocsLink) {
+      apiDocsLink.hidden = true;
+    }
+  })
+  .catch(() => {
+    /* The dashboard still works if status probing fails. */
+  });

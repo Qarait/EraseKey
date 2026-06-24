@@ -37,12 +37,30 @@ def _signature(payload: dict[str, Any]) -> str:
     ).hexdigest()
 
 
-def subject_ref(subject_id: str) -> str:
+def subject_ref(
+    subject_id: str,
+    tenant_id: str | None = None,
+    dataset_id: str | None = None,
+) -> str:
+    if tenant_id is not None and dataset_id is not None:
+        payload = f"{tenant_id}\x1f{dataset_id}\x1f{subject_id}"
+    else:
+        payload = subject_id
     return hmac.new(
         _signing_key(),
-        subject_id.encode("utf-8"),
+        payload.encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()
+
+
+def receipt_matches_subject(receipt: dict[str, Any], subject_id: str) -> bool:
+    scoped_ref = subject_ref(
+        subject_id,
+        receipt.get("tenant_id"),
+        receipt.get("dataset_id"),
+    )
+    legacy_ref = subject_ref(subject_id)
+    return receipt.get("subject_ref") in {scoped_ref, legacy_ref}
 
 
 def append_deletion_receipt(
@@ -62,7 +80,7 @@ def append_deletion_receipt(
             "Deletion receipt journal failed signature verification."
         )
 
-    expected_subject_ref = subject_ref(subject_id)
+    expected_subject_ref = subject_ref(subject_id, tenant_id, dataset_id)
     for receipt in existing_receipts:
         if receipt["request_id"] != request_id:
             continue
@@ -155,10 +173,13 @@ def has_deletion_receipt(
     subject_id: str,
     receipts: Iterable[dict[str, Any]] | None = None,
 ) -> bool:
-    expected_ref = subject_ref(subject_id)
+    expected_refs = {
+        subject_ref(subject_id, tenant_id, dataset_id),
+        subject_ref(subject_id),
+    }
     return any(
         receipt["tenant_id"] == tenant_id
         and receipt["dataset_id"] == dataset_id
-        and receipt["subject_ref"] == expected_ref
+        and receipt["subject_ref"] in expected_refs
         for receipt in valid_receipts(receipts)
     )

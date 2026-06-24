@@ -27,8 +27,8 @@ running reconciliation. It is intended only for local development and rejects
 non-mock KMS configurations.
 
 When `ERASEKEY_PUBLIC_DEMO_MODE=true`, EraseKey exposes only the dashboard,
-static assets, health check, and demo scenario route. The rest of the API,
-including `/docs` and `/openapi.json`, returns `404`.
+static assets, health check, `GET /demo/status`, and demo scenario route. The
+rest of the API, including `/docs` and `/openapi.json`, returns `404`.
 
 ## Step-up challenges
 

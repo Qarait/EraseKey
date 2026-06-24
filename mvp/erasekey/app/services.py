@@ -27,6 +27,7 @@ from .receipts import (
     append_deletion_receipt,
     has_deletion_receipt,
     iter_receipts,
+    receipt_matches_subject,
     subject_ref,
     valid_receipts,
     verify_receipt_log,
@@ -463,7 +464,7 @@ def create_record(payload: RecordCreate) -> dict[str, Any]:
         }
 
 
-def read_record(record_id: str) -> dict[str, Any]:
+def read_record(record_id: str, enforce_receipts: bool = True) -> dict[str, Any]:
     with get_conn() as conn:
         row = conn.execute('SELECT * FROM records WHERE id = ?', (record_id,)).fetchone()
         if row is None:
@@ -479,6 +480,26 @@ def read_record(record_id: str) -> dict[str, Any]:
             }
         
         key_item = _row_to_dict(key_row) or {}
+        if enforce_receipts:
+            receipts = list(iter_receipts())
+            receipt_status = verify_receipt_log(receipts)
+            if not receipt_status['ok']:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail='Deletion receipt journal is invalid; reads are disabled.',
+                )
+            if has_deletion_receipt(
+                record['tenant_id'],
+                record['dataset_id'],
+                record['subject_id'],
+                receipts,
+            ):
+                return {
+                    'id': record['id'], 'tenant_id': record['tenant_id'], 'dataset_id': record['dataset_id'],
+                    'subject_id': record['subject_id'], 'record_type': record['record_type'],
+                    'created_at': record['created_at'], 'payload': None,
+                    'key_state': KeyState.destroyed.value, 'erase_status': EraseStatus.cryptographically_erased.value,
+                }
         
         if key_item['key_state'] == KeyState.destroyed.value or not key_item['wrapped_key']:
             return {
@@ -1085,7 +1106,7 @@ def reconcile_deletion_receipts() -> dict[str, Any]:
             matched = False
             for row in key_rows:
                 key_item = _row_to_dict(row) or {}
-                if subject_ref(key_item['subject_id']) != receipt['subject_ref']:
+                if not receipt_matches_subject(receipt, key_item['subject_id']):
                     continue
                 conn.execute(
                     """

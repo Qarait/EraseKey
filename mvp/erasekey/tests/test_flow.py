@@ -21,7 +21,7 @@ from fastapi.testclient import TestClient
 from app.db import init_db, get_conn
 from app.main import app
 from app.key_providers import MockKmsProvider, KeyProviderError
-from app.receipts import append_deletion_receipt, verify_receipt_log
+from app.receipts import append_deletion_receipt, subject_ref, verify_receipt_log
 
 
 class EraseKeyFlowTests(unittest.TestCase):
@@ -542,7 +542,10 @@ class EraseKeyFlowTests(unittest.TestCase):
             )
 
         resurrected = self.client.get(f"/records/{record['id']}")
-        self.assertEqual(resurrected.json()['erase_status'], 'readable')
+        self.assertEqual(
+            resurrected.json()['erase_status'],
+            'cryptographically_erased',
+        )
 
         blocked_write = self.client.post('/records', json={
             'tenant_id': tenant['id'],
@@ -581,6 +584,18 @@ class EraseKeyFlowTests(unittest.TestCase):
 
         self.assertEqual(first, second)
         self.assertEqual(verify_receipt_log()['receipt_count'], 1)
+        self.assertNotEqual(
+            first['subject_ref'],
+            subject_ref(arguments['subject_id']),
+        )
+        self.assertEqual(
+            first['subject_ref'],
+            subject_ref(
+                arguments['subject_id'],
+                arguments['tenant_id'],
+                arguments['dataset_id'],
+            ),
+        )
 
     def test_startup_fails_closed_for_invalid_receipt_journal(self) -> None:
         receipt_path = Path(os.environ['ERASEKEY_RECEIPT_LOG_PATH'])
@@ -641,12 +656,21 @@ class EraseKeyFlowTests(unittest.TestCase):
 
             docs = self.client.get('/docs')
             self.assertEqual(docs.status_code, 404)
+            self.assertEqual(docs.headers['x-frame-options'], 'DENY')
+
+            status = self.client.get('/demo/status')
+            self.assertEqual(status.status_code, 200)
+            self.assertTrue(status.json()['public_demo_mode'])
 
             scenario = self.client.post('/demo/restore-scenario')
             self.assertEqual(scenario.status_code, 200)
             self.assertEqual(
                 scenario.json()['timeline'][-1]['erase_status'],
                 'cryptographically_erased',
+            )
+            self.assertEqual(
+                self.client.get('/admin/deletion-receipts/verify').status_code,
+                404,
             )
         finally:
             object.__setattr__(settings, 'public_demo_mode', original_mode)
@@ -667,10 +691,49 @@ class EraseKeyFlowTests(unittest.TestCase):
 
             self.assertEqual(first.status_code, 200)
             self.assertEqual(second.status_code, 429)
+            self.assertEqual(second.headers['x-frame-options'], 'DENY')
         finally:
             object.__setattr__(settings, 'public_demo_mode', original_mode)
             object.__setattr__(settings, 'public_demo_rate_limit_per_minute', original_limit)
             app.state.public_demo_rate_limits.clear()
+
+    def test_public_demo_mode_cleans_generated_state(self) -> None:
+        from app.config import settings
+
+        original_mode = settings.public_demo_mode
+        object.__setattr__(settings, 'public_demo_mode', True)
+        app.state.public_demo_rate_limits.clear()
+        try:
+            response = self.client.post('/demo/restore-scenario')
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(verify_receipt_log()['receipt_count'], 0)
+            with get_conn() as conn:
+                for table in (
+                    'tenants',
+                    'datasets',
+                    'records',
+                    'subject_keys',
+                    'deletion_requests',
+                ):
+                    count = conn.execute(f'SELECT COUNT(*) AS count FROM {table}').fetchone()['count']
+                    self.assertEqual(count, 0, table)
+        finally:
+            object.__setattr__(settings, 'public_demo_mode', original_mode)
+            app.state.public_demo_rate_limits.clear()
+
+    def test_demo_endpoint_can_be_disabled(self) -> None:
+        from app.config import settings
+
+        original_mode = settings.public_demo_mode
+        original_enabled = settings.demo_endpoint_enabled
+        object.__setattr__(settings, 'public_demo_mode', False)
+        object.__setattr__(settings, 'demo_endpoint_enabled', False)
+        try:
+            response = self.client.post('/demo/restore-scenario')
+            self.assertEqual(response.status_code, 404)
+        finally:
+            object.__setattr__(settings, 'public_demo_mode', original_mode)
+            object.__setattr__(settings, 'demo_endpoint_enabled', original_enabled)
 
 if __name__ == '__main__':
     unittest.main()

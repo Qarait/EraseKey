@@ -49,5 +49,6 @@ class Settings:
     public_demo_rate_limit_per_minute: int = int(
         os.getenv("ERASEKEY_PUBLIC_DEMO_RATE_LIMIT_PER_MINUTE", "12")
     )
+    demo_endpoint_enabled: bool = _env_bool("ERASEKEY_ENABLE_DEMO_ENDPOINT", True)
 
 settings = Settings()
