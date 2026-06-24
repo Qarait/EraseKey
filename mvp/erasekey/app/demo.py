@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +46,7 @@ def _rewrite_receipt_log_without_request(request_id: str) -> None:
         for line in retained_lines:
             handle.write(line + "\n")
         handle.flush()
+        os.fsync(handle.fileno())
 
 
 def _cleanup_public_demo_rows(
@@ -54,8 +56,27 @@ def _cleanup_public_demo_rows(
     subject_id: str,
     record_id: str,
     request_id: str,
+    receipt_ids: list[str],
 ) -> None:
     with get_conn() as conn:
+        subject_key_rows = conn.execute(
+            """
+            SELECT id
+            FROM subject_keys
+            WHERE tenant_id = ? AND dataset_id = ? AND subject_id = ?
+            """,
+            (tenant_id, dataset_id, subject_id),
+        ).fetchall()
+        generated_entity_ids = [
+            tenant_id,
+            dataset_id,
+            record_id,
+            request_id,
+            *(row["id"] for row in subject_key_rows),
+            *receipt_ids,
+        ]
+        placeholders = ",".join("?" for _ in generated_entity_ids)
+
         conn.execute("DELETE FROM records WHERE id = ?", (record_id,))
         conn.execute(
             """
@@ -68,21 +89,14 @@ def _cleanup_public_demo_rows(
         conn.execute("DELETE FROM datasets WHERE id = ?", (dataset_id,))
         conn.execute("DELETE FROM tenants WHERE id = ?", (tenant_id,))
         conn.execute(
-            """
+            f"""
             DELETE FROM audit_events
-            WHERE entity_id IN (?, ?, ?, ?)
+            WHERE entity_id IN ({placeholders})
                OR payload_json LIKE ?
             """,
-            (
-                tenant_id,
-                dataset_id,
-                record_id,
-                request_id,
-                f"%{subject_id}%",
-            ),
+            (*generated_entity_ids, f"%{subject_id}%"),
         )
     _rewrite_receipt_log_without_request(request_id)
-
 
 def run_restore_scenario() -> dict[str, Any]:
     if settings.kms_mode != "mock":
@@ -230,5 +244,6 @@ def run_restore_scenario() -> dict[str, Any]:
             subject_id=subject_id,
             record_id=record["id"],
             request_id=deletion_request["id"],
+            receipt_ids=reconciliation["matched_receipt_ids"],
         )
     return result
