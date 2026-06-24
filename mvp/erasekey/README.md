@@ -1,12 +1,11 @@
 # EraseKey
 
-EraseKey demonstrates subject-scoped encryption and deletion that survives a
-stale database restore. It is a local engineering project, not a general privacy
-operations platform.
+EraseKey is a small local project for testing subject-scoped encryption against
+stale database restores. It is not a general privacy operations platform.
 
-Instead of pretending every copy of user data can be physically deleted immediately, this service encrypts subject-scoped records with envelope encryption and then makes them unreadable by destroying the wrapped subject keys. The ciphertext remains in place (mirroring backups/cold storage), but is rendered cryptographically unrecoverable.
+The service does not pretend that every old copy of a record disappears on command. It keeps ciphertext in place, as backups often do, and makes the data unreadable by destroying the wrapped subject keys.
 
-## What it demonstrates
+## What is included
 
 - Tenant and dataset scoped records.
 - One envelope-encryption key per subject.
@@ -76,9 +75,9 @@ tests/
 
 3. Open the Restore Lab dashboard at `http://127.0.0.1:8000/dashboard`.
 
-   The dashboard runs a generated, mock-KMS scenario that shows a record moving
-   from readable, to erased, back to readable after stale key restoration, and
-   finally to erased again after receipt reconciliation.
+   The dashboard runs a mock-KMS scenario: a record starts readable, becomes
+   erased, becomes readable again after stale key state is restored, and then
+   becomes erased again after receipt reconciliation.
 
 4. Open the API docs at `http://127.0.0.1:8000/docs`.
 
@@ -104,7 +103,7 @@ EraseKey behavior is controlled by environment variables:
 Set `ERASEKEY_PUBLIC_DEMO_MODE=true` when hosting a public sandbox. This mode
 keeps the normal development API out of reach and exposes only the dashboard,
 static assets, health check, and mock restore scenario endpoint. It also hides
-`/docs`, applies basic browser security headers, cleans generated scenario
+`/docs`, applies basic browser security headers, cleans scenario
 state after each public run, and rate-limits scenario runs.
 
 The in-process rate limit is only a guardrail. A public deployment should also
@@ -134,9 +133,9 @@ It runs as a non-root user.
 
 ## Restore-Safety Demo
 
-The dashboard runs this complete sequence automatically. The mock-only
-`POST /demo/restore-scenario` endpoint exists for that local demonstration and
-should not be exposed to an untrusted network.
+The dashboard runs this sequence automatically. The mock-only
+`POST /demo/restore-scenario` endpoint exists for the local lab and should not
+be exposed to an untrusted network.
 
 1. Create a tenant, dataset, record, and deletion request.
 2. Finalize the deletion. EraseKey destroys the wrapped subject key and appends a signed receipt.
