@@ -1,5 +1,7 @@
 # EraseKey
 
+Project page: https://qarait.github.io/EraseKey/
+
 EraseKey is a small FastAPI project about one awkward edge case in
 cryptographic deletion: an old database snapshot can restore both encrypted data
 and the wrapped key needed to read it.
