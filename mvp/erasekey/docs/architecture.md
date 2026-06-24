@@ -47,6 +47,10 @@ database backup. At startup, reconciliation verifies the journal and reapplies
 any missing erasures before records are served. An invalid journal prevents the
 application from starting.
 
+Record reads also consult the receipt journal. If a signed deletion receipt
+exists for the record's tenant, dataset, and subject, the API returns
+`cryptographically_erased` even if SQLite still contains an active wrapped key.
+
 Receipt creation is idempotent by deletion request. EraseKey intentionally
 writes and flushes the receipt before the SQLite transaction commits. If that
 commit fails, the receipt remains authoritative and startup reconciliation

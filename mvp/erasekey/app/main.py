@@ -66,8 +66,10 @@ PUBLIC_DEMO_ALLOWED_ROUTES = {
     ("GET", "/"),
     ("GET", "/dashboard"),
     ("GET", "/healthz"),
+    ("GET", "/demo/status"),
     ("POST", "/demo/restore-scenario"),
 }
+LOCAL_DEMO_CLIENTS = {"127.0.0.1", "::1", "localhost", "testclient"}
 PUBLIC_DEMO_RATE_WINDOW_SECONDS = 60.0
 
 
@@ -95,6 +97,17 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.state.public_demo_rate_limits = defaultdict(deque)
 
 
+def _add_public_demo_headers(response):
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; script-src 'self'; style-src 'self'; "
+        "img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'"
+    )
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    return response
+
+
 def _public_demo_route_allowed(method: str, path: str) -> bool:
     if method == "GET" and path.startswith("/static/"):
         return True
@@ -120,26 +133,29 @@ def _demo_rate_limited(request: Request) -> bool:
 async def public_demo_guard(request: Request, call_next):
     if settings.public_demo_mode:
         if not _public_demo_route_allowed(request.method, request.url.path):
-            return JSONResponse(
+            return _add_public_demo_headers(JSONResponse(
                 status_code=404,
                 content={"detail": "Public demo mode exposes only the dashboard."},
-            )
+            ))
         if _demo_rate_limited(request):
-            return JSONResponse(
+            return _add_public_demo_headers(JSONResponse(
                 status_code=429,
                 content={"detail": "Too many demo runs. Try again in a minute."},
-            )
+            ))
 
     response = await call_next(request)
     if settings.public_demo_mode:
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; script-src 'self'; style-src 'self'; "
-            "img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'"
-        )
-        response.headers["Referrer-Policy"] = "no-referrer"
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
+        _add_public_demo_headers(response)
     return response
+
+
+def _demo_endpoint_allowed(request: Request) -> bool:
+    if settings.public_demo_mode:
+        return True
+    if not settings.demo_endpoint_enabled:
+        return False
+    client_host = request.client.host if request.client else "unknown"
+    return client_host in LOCAL_DEMO_CLIENTS
 
 
 @app.get("/", include_in_schema=False)
@@ -243,8 +259,18 @@ def api_reconcile_restored_data() -> RestoreReconciliationOut:
 
 
 @app.post("/demo/restore-scenario")
-def api_run_restore_scenario() -> dict[str, Any]:
+def api_run_restore_scenario(request: Request) -> dict[str, Any]:
+    if not _demo_endpoint_allowed(request):
+        raise HTTPException(status_code=404, detail="Demo endpoint is not enabled.")
     return run_restore_scenario()
+
+
+@app.get("/demo/status")
+def api_demo_status() -> dict[str, Any]:
+    return {
+        "public_demo_mode": settings.public_demo_mode,
+        "demo_endpoint_enabled": settings.demo_endpoint_enabled,
+    }
 
 
 @app.post('/tenants', response_model=TenantOut, status_code=201)

@@ -32,6 +32,7 @@ deletion intent across that boundary.
 - Signed deletion receipts with keyed subject references
 - Idempotent receipt creation for safe finalization retries
 - Write blocking for scheduled and deleted subjects
+- Read-time receipt enforcement for resurrected keys
 - Startup reconciliation of keys resurrected by a stale SQLite restore
 - A local Restore Lab dashboard that demonstrates the complete failure and recovery path
 
@@ -80,7 +81,10 @@ mode exposes only:
 
 It blocks the raw API and `/docs`, adds basic browser security headers, and
 rate-limits demo scenario runs. The included `Dockerfile` starts in this mode
-with mock KMS and temporary container storage.
+with mock KMS, temporary container storage, and a non-root user.
+
+The built-in rate limit is in memory and intended as a local safety rail. For a
+public deployment, add provider-level or proxy-level rate limiting as well.
 
 ```bash
 docker build -t erasekey-demo .
