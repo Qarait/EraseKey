@@ -36,6 +36,11 @@ deletion intent across that boundary.
 - Startup reconciliation of keys resurrected by a stale SQLite restore
 - A local Restore Lab dashboard that demonstrates the complete failure and recovery path
 
+## Restore Lab preview
+
+![EraseKey Restore Lab dashboard](docs/assets/erasekey-restore-lab.png)
+
+A short animated run is available here: [`docs/assets/erasekey-restore-lab.gif`](docs/assets/erasekey-restore-lab.gif).
 ## How the restore flow works
 
 ```text
