@@ -1,6 +1,6 @@
 # EraseKey
 
-EraseKey is a small FastAPI project that explores a specific failure mode in
+EraseKey is a small FastAPI project about one awkward edge case in
 cryptographic deletion: an old database snapshot can restore both encrypted data
 and the wrapped key needed to read it.
 
@@ -34,7 +34,7 @@ deletion intent across that boundary.
 - Write blocking for scheduled and deleted subjects
 - Read-time receipt enforcement for resurrected keys
 - Startup reconciliation of keys resurrected by a stale SQLite restore
-- A local Restore Lab dashboard that demonstrates the complete failure and recovery path
+- A local Restore Lab dashboard for the stale-restore scenario
 
 ## Restore Lab preview
 
@@ -70,7 +70,7 @@ pip install -r requirements.txt -r requirements-dev.txt
 uvicorn app.main:app --reload
 ```
 
-Open `http://127.0.0.1:8000/docs` for the generated API documentation.
+Open `http://127.0.0.1:8000/docs` for FastAPI's generated API docs.
 Open `http://127.0.0.1:8000/dashboard` for the interactive Restore Lab.
 
 ## Public demo mode

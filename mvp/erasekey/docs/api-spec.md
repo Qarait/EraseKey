@@ -15,12 +15,12 @@ short map of the available routes.
 | `GET` | `/admin/deletion-receipts/verify` | Verify the signed receipt journal |
 | `POST` | `/admin/restore/reconcile` | Reapply deletion receipts after a stale restore |
 
-## Local demonstration
+## Local lab
 
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/dashboard` | Open the local Restore Lab interface |
-| `POST` | `/demo/restore-scenario` | Run a generated stale-restore scenario with the mock KMS |
+| `POST` | `/demo/restore-scenario` | Run a mock stale-restore scenario |
 
 The demo route deliberately restores deleted key material before immediately
 running reconciliation. It is intended only for local development and rejects
