@@ -22,6 +22,11 @@ Instead of pretending every copy of user data can be physically deleted immediat
 - Read-time receipt checks that keep resurrected keys unreadable before reconciliation completes.
 - Write blocking for subjects with pending or completed deletion.
 
+## Dashboard preview
+
+![EraseKey Restore Lab dashboard](../../docs/assets/erasekey-restore-lab.png)
+
+The animated restore-flow capture is here: [`../../docs/assets/erasekey-restore-lab.gif`](../../docs/assets/erasekey-restore-lab.gif).
 ## Tech Stack
 
 - **FastAPI**: Core API framework.
