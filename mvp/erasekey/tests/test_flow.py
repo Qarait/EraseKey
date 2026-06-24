@@ -42,11 +42,16 @@ class EraseKeyFlowTests(unittest.TestCase):
         }
 
     def setUp(self) -> None:
+        from app.config import settings
+
         db_path = Path(os.environ['ERASEKEY_DB_PATH'])
-        if db_path.exists():
-            db_path.unlink()
-        for env_name in ('ERASEKEY_RECEIPT_LOG_PATH', 'ERASEKEY_RECEIPT_SIGNING_KEY_PATH'):
-            path = Path(os.environ[env_name])
+        receipt_path = Path(os.environ['ERASEKEY_RECEIPT_LOG_PATH'])
+        signing_key_path = Path(os.environ['ERASEKEY_RECEIPT_SIGNING_KEY_PATH'])
+        object.__setattr__(settings, 'database_path', str(db_path))
+        object.__setattr__(settings, 'receipt_log_path', str(receipt_path))
+        object.__setattr__(settings, 'receipt_signing_key_path', str(signing_key_path))
+        object.__setattr__(settings, 'kms_mode', 'mock')
+        for path in (db_path, receipt_path, signing_key_path):
             if path.exists():
                 path.unlink()
         init_db()
@@ -714,6 +719,7 @@ class EraseKeyFlowTests(unittest.TestCase):
                     'records',
                     'subject_keys',
                     'deletion_requests',
+                    'audit_events',
                 ):
                     count = conn.execute(f'SELECT COUNT(*) AS count FROM {table}').fetchone()['count']
                     self.assertEqual(count, 0, table)
